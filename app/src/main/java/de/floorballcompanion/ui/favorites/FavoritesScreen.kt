@@ -1,0 +1,226 @@
+package de.floorballcompanion.ui.favorites
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.SportsHockey
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import de.floorballcompanion.data.local.entity.FavoriteEntity
+import de.floorballcompanion.data.repository.FloorballRepository
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+// ── ViewModel ────────────────────────────────────────────────
+
+@HiltViewModel
+class FavoritesViewModel @Inject constructor(
+    private val repository: FloorballRepository,
+) : ViewModel() {
+
+    val favorites: StateFlow<List<FavoriteEntity>> =
+        repository.observeFavorites()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun removeFavorite(favorite: FavoriteEntity) {
+        viewModelScope.launch {
+            repository.removeFavorite(favorite.type, favorite.externalId)
+        }
+    }
+}
+
+// ── Screen ───────────────────────────────────────────────────
+
+@Composable
+fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
+    val favorites by viewModel.favorites.collectAsState()
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            text = "Favoriten",
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(16.dp),
+        )
+
+        if (favorites.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.SportsHockey,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = "Noch keine Favoriten",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Gehe zu \"Ligen\" und markiere\nLigen oder Teams mit dem Stern.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+            }
+        } else {
+            // Gruppiert nach Typ
+            val grouped = favorites.groupBy { it.type }
+
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                grouped["league"]?.let { leagues ->
+                    item {
+                        SectionHeader(
+                            icon = Icons.Default.EmojiEvents,
+                            title = "Ligen (${leagues.size})",
+                        )
+                    }
+                    items(leagues, key = { "league_${it.externalId}" }) { fav ->
+                        FavoriteCard(
+                            favorite = fav,
+                            onRemove = { viewModel.removeFavorite(fav) },
+                        )
+                    }
+                }
+
+                grouped["team"]?.let { teams ->
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        SectionHeader(
+                            icon = Icons.Default.Groups,
+                            title = "Teams (${teams.size})",
+                        )
+                    }
+                    items(teams, key = { "team_${it.externalId}" }) { fav ->
+                        FavoriteCard(
+                            favorite = fav,
+                            onRemove = { viewModel.removeFavorite(fav) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Section Header ───────────────────────────────────────────
+
+@Composable
+private fun SectionHeader(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(vertical = 4.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+// ── Einzelne Favoriten-Card ──────────────────────────────────
+
+@Composable
+private fun FavoriteCard(
+    favorite: FavoriteEntity,
+    onRemove: () -> Unit,
+) {
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = favorite.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                favorite.gameOperationName?.let { opName ->
+                    Text(
+                        text = opName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                favorite.leagueName?.let { lName ->
+                    Text(
+                        text = lName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            IconButton(onClick = { showDeleteDialog = true }) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Favorit entfernen",
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Favorit entfernen?") },
+            text = { Text("\"${favorite.name}\" aus den Favoriten entfernen?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRemove()
+                    showDeleteDialog = false
+                }) {
+                    Text("Entfernen", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Abbrechen")
+                }
+            },
+        )
+    }
+}
