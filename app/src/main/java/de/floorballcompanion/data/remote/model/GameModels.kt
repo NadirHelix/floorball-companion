@@ -48,23 +48,37 @@ data class GameEvent(
 )
 
 @Serializable
+data class GameResult(
+    @SerialName("home_goals") val homeGoals: Int = 0,
+    @SerialName("guest_goals") val guestGoals: Int = 0,
+    val forfait: Boolean = false,
+    val overtime: Boolean = false,
+    @SerialName("result_string") val resultString: String? = null,
+)
+
+@Serializable
 data class ScheduledGame(
     @SerialName("game_id") val gameId: Int? = null,
     val id: Int? = null, // manche Endpunkte nutzen "id" statt "game_id"
-    @SerialName("game_number") val gameNumber: String? = null,
-    val date: String,
-    @SerialName("start_time") val startTime: String,
-    @SerialName("game_day_number") val gameDayNumber: Int? = null,
-    @SerialName("home_team_id") val homeTeamId: Int,
-    @SerialName("home_team_name") val homeTeamName: String,
+    @SerialName("game_number") val gameNumber: Int? = null,
+    val date: String = "",
+    val time: String = "",
+    @SerialName("game_day") val gameDayNumber: Int? = null,
+    @SerialName("home_team_id") val homeTeamId: Int = 0,
+    @SerialName("home_team_name") val homeTeamName: String = "",
     @SerialName("home_team_logo") val homeTeamLogo: String? = null,
-    @SerialName("guest_team_id") val guestTeamId: Int,
-    @SerialName("guest_team_name") val guestTeamName: String,
+    @SerialName("guest_team_id") val guestTeamId: Int = 0,
+    @SerialName("guest_team_name") val guestTeamName: String = "",
     @SerialName("guest_team_logo") val guestTeamLogo: String? = null,
-    @SerialName("home_goals") val homeGoals: Int? = null,
-    @SerialName("guest_goals") val guestGoals: Int? = null,
-    @SerialName("game_status") val gameStatus: String? = null,
+    val result: GameResult? = null,
+    val state: String? = null,
+    @SerialName("result_string") val resultString: String? = null,
 ) {
     /** Hilfsfunktion, da manche Endpunkte game_id, andere id nutzen */
     val resolvedGameId: Int get() = gameId ?: id ?: 0
+
+    val homeGoals: Int? get() = result?.homeGoals
+    val guestGoals: Int? get() = result?.guestGoals
+    val startTime: String get() = time
+    val gameStatus: String? get() = state
 }

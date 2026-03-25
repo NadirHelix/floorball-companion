@@ -7,16 +7,16 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface FavoriteDao {
 
-    @Query("SELECT * FROM favorites ORDER BY type, name")
+    @Query("SELECT * FROM favorites ORDER BY type, sortOrder, name")
     fun observeAll(): Flow<List<FavoriteEntity>>
 
-    @Query("SELECT * FROM favorites WHERE type = :type")
+    @Query("SELECT * FROM favorites WHERE type = :type ORDER BY sortOrder, name")
     fun observeByType(type: String): Flow<List<FavoriteEntity>>
 
-    @Query("SELECT * FROM favorites WHERE type = 'league'")
+    @Query("SELECT * FROM favorites WHERE type = 'league' ORDER BY sortOrder, name")
     fun observeLeagues(): Flow<List<FavoriteEntity>>
 
-    @Query("SELECT * FROM favorites WHERE type = 'team'")
+    @Query("SELECT * FROM favorites WHERE type = 'team' ORDER BY sortOrder, name")
     fun observeTeams(): Flow<List<FavoriteEntity>>
 
     @Query("SELECT externalId FROM favorites WHERE type = 'team'")
@@ -33,4 +33,10 @@ interface FavoriteDao {
 
     @Query("DELETE FROM favorites WHERE type = :type AND externalId = :externalId")
     suspend fun remove(type: String, externalId: Int)
+
+    @Query("UPDATE favorites SET sortOrder = :sortOrder WHERE type = :type AND externalId = :externalId")
+    suspend fun updateSortOrder(type: String, externalId: Int, sortOrder: Int)
+
+    @Query("SELECT COALESCE(MAX(sortOrder), 0) FROM favorites WHERE type = :type AND sortOrder < ${Int.MAX_VALUE}")
+    suspend fun getMaxSortOrder(type: String): Int
 }

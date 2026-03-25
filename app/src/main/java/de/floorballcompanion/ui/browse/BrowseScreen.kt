@@ -43,6 +43,10 @@ class BrowseViewModel @Inject constructor(
     private val _favoriteLeagueIds = MutableStateFlow<Set<Int>>(emptySet())
     val favoriteLeagueIds = _favoriteLeagueIds.asStateFlow()
 
+    // Anzahl Favoriten pro Verbands-Slug
+    private val _favoriteCountBySlug = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val favoriteCountBySlug = _favoriteCountBySlug.asStateFlow()
+
     init {
         loadOperations()
         observeFavorites()
@@ -52,6 +56,10 @@ class BrowseViewModel @Inject constructor(
         viewModelScope.launch {
             repository.observeFavoriteLeagues().collect { favs ->
                 _favoriteLeagueIds.value = favs.map { it.externalId }.toSet()
+                _favoriteCountBySlug.value = favs
+                    .mapNotNull { it.gameOperationSlug }
+                    .groupingBy { it }
+                    .eachCount()
             }
         }
     }
@@ -89,6 +97,7 @@ class BrowseViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val leagues = repository.getLeaguesByOperation(operation.id)
+                    .filter { l -> l.name.length > 2 }
                 _uiState.update {
                     it.copy(
                         leaguesLoading = false,
@@ -109,6 +118,7 @@ class BrowseViewModel @Inject constructor(
             if (isFav) {
                 repository.removeFavorite("league", league.id)
             } else {
+                val nextOrder = repository.getMaxFavoriteSortOrder("league") + 1
                 repository.addFavorite(
                     FavoriteEntity(
                         type = "league",
@@ -116,6 +126,7 @@ class BrowseViewModel @Inject constructor(
                         name = league.name,
                         gameOperationSlug = league.gameOperationSlug,
                         gameOperationName = league.gameOperationName,
+                        sortOrder = nextOrder,
                     )
                 )
             }
@@ -143,6 +154,7 @@ fun BrowseScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val favoriteIds by viewModel.favoriteLeagueIds.collectAsState()
+    val favCountBySlug by viewModel.favoriteCountBySlug.collectAsState()
 
     when {
         uiState.isLoading -> {
@@ -160,6 +172,13 @@ fun BrowseScreen(
             }
         }
         else -> {
+            // Verbände mit Favoriten nach oben sortieren
+            val sortedOperations = remember(uiState.gameOperations, favCountBySlug) {
+                uiState.gameOperations.sortedByDescending { op ->
+                    (favCountBySlug[op.path] ?: 0) > 0
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 8.dp),
@@ -179,7 +198,7 @@ fun BrowseScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                items(uiState.gameOperations, key = { it.id }) { operation ->
+                items(sortedOperations, key = { it.id }) { operation ->
                     OperationCard(
                         operation = operation,
                         isExpanded = uiState.expandedOperationId == operation.id,
@@ -187,6 +206,7 @@ fun BrowseScreen(
                         leagues = if (uiState.expandedOperationId == operation.id)
                             uiState.leaguesForOperation else emptyList(),
                         favoriteIds = favoriteIds,
+                        favoriteCount = favCountBySlug[operation.path] ?: 0,
                         onToggleExpand = { viewModel.loadLeaguesForOperation(operation) },
                         onToggleFavorite = { viewModel.toggleLeagueFavorite(it) },
                         onLeagueClick = onLeagueClick,
@@ -206,6 +226,7 @@ private fun OperationCard(
     leaguesLoading: Boolean,
     leagues: List<LeaguePreview>,
     favoriteIds: Set<Int>,
+    favoriteCount: Int,
     onToggleExpand: () -> Unit,
     onToggleFavorite: (LeaguePreview) -> Unit,
     onLeagueClick: (Int) -> Unit,
@@ -234,11 +255,21 @@ private fun OperationCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
-                Text(
-                    text = operation.shortName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = operation.shortName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (favoriteCount > 0) {
+                        Text(
+                            text = " ($favoriteCount ★)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
             }
             Icon(
                 imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -265,13 +296,56 @@ private fun OperationCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    leagues.forEach { league ->
-                        LeagueRow(
-                            league = league,
-                            isFavorite = league.id in favoriteIds,
-                            onToggleFavorite = { onToggleFavorite(league) },
-                            onClick = { onLeagueClick(league.id) },
-                        )
+                    // Ligen nach GF/KF gruppieren, Favoriten jeweils oben
+                    val gfLeagues = remember(leagues, favoriteIds) {
+                        leagues.filter { it.fieldSize == "GF" }
+                            .sortedByDescending { it.id in favoriteIds }
+                    }
+                    val kfLeagues = remember(leagues, favoriteIds) {
+                        leagues.filter { it.fieldSize != "GF" }
+                            .sortedByDescending { it.id in favoriteIds }
+                    }
+
+                    if (gfLeagues.isNotEmpty() && kfLeagues.isNotEmpty()) {
+                        // Beide Feldgrößen vorhanden → Tabs
+                        var selectedFieldTab by remember { mutableIntStateOf(0) }
+                        val tabs = listOf("Großfeld (${gfLeagues.size})", "Kleinfeld (${kfLeagues.size})")
+
+                        TabRow(
+                            selectedTabIndex = selectedFieldTab,
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                        ) {
+                            tabs.forEachIndexed { index, title ->
+                                Tab(
+                                    selected = selectedFieldTab == index,
+                                    onClick = { selectedFieldTab = index },
+                                    text = { Text(title, style = MaterialTheme.typography.labelMedium) },
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+
+                        val visibleLeagues = if (selectedFieldTab == 0) gfLeagues else kfLeagues
+                        visibleLeagues.forEach { league ->
+                            LeagueRow(
+                                league = league,
+                                isFavorite = league.id in favoriteIds,
+                                onToggleFavorite = { onToggleFavorite(league) },
+                                onClick = { onLeagueClick(league.id) },
+                            )
+                        }
+                    } else {
+                        // Nur eine Feldgröße → keine Tabs nötig
+                        val allSorted = if (gfLeagues.isNotEmpty()) gfLeagues else kfLeagues
+                        allSorted.forEach { league ->
+                            LeagueRow(
+                                league = league,
+                                isFavorite = league.id in favoriteIds,
+                                onToggleFavorite = { onToggleFavorite(league) },
+                                onClick = { onLeagueClick(league.id) },
+                            )
+                        }
                     }
                 }
             }

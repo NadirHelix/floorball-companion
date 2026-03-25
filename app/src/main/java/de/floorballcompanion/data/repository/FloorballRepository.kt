@@ -92,6 +92,12 @@ class FloorballRepository @Inject constructor(
     suspend fun getFavoriteLeagueIds(): List<Int> =
         favoriteDao.getFavoriteLeagueIds()
 
+    suspend fun updateFavoriteSortOrder(type: String, externalId: Int, sortOrder: Int) =
+        favoriteDao.updateSortOrder(type, externalId, sortOrder)
+
+    suspend fun getMaxFavoriteSortOrder(type: String): Int =
+        favoriteDao.getMaxSortOrder(type)
+
     // ── Cache: Spiele für favorisierte Teams ─────────────────
 
     fun observeGamesForFavoriteTeams(teamIds: List<Int>): Flow<List<CachedGameEntity>> =

@@ -12,7 +12,7 @@ import de.floorballcompanion.data.local.entity.*
         CachedTableEntry::class,
         CachedGameEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

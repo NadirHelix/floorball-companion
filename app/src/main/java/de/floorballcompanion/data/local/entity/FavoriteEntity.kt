@@ -15,4 +15,5 @@ data class FavoriteEntity(
     val leagueId: Int? = null,     // Bei Team-Favoriten: zugehörige Liga
     val leagueName: String? = null,
     val addedAt: Long = System.currentTimeMillis(),
+    val sortOrder: Int = Int.MAX_VALUE,
 )

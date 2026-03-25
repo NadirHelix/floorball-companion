@@ -10,6 +10,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,6 +24,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import de.floorballcompanion.data.local.entity.FavoriteEntity
 import de.floorballcompanion.data.remote.model.GameDayTitle
 import de.floorballcompanion.data.remote.model.ScheduledGame
 import de.floorballcompanion.data.remote.model.ScorerEntry
@@ -29,7 +32,10 @@ import de.floorballcompanion.data.remote.model.TableEntry
 import de.floorballcompanion.data.repository.FloorballRepository
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -41,6 +47,8 @@ import javax.inject.Inject
 
 data class LeagueDetailUiState(
     val leagueName: String = "",
+    val gameOperationSlug: String? = null,
+    val gameOperationName: String? = null,
     val isLoading: Boolean = true,
     val error: String? = null,
     val allGames: List<ScheduledGame> = emptyList(),
@@ -62,10 +70,14 @@ class LeagueDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    private val leagueId: Int = checkNotNull(savedStateHandle["leagueId"])
+    private val leagueId: Int = savedStateHandle.get<Int>("leagueId") ?: 0
 
     private val _uiState = MutableStateFlow(LeagueDetailUiState())
     val uiState = _uiState.asStateFlow()
+
+    val isFavorite: StateFlow<Boolean> =
+        repository.isFavorite("league", leagueId)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     init {
         loadData()
@@ -99,6 +111,8 @@ class LeagueDetailViewModel @Inject constructor(
                     it.copy(
                         isLoading = false,
                         leagueName = detail.name,
+                        gameOperationSlug = detail.gameOperationSlug,
+                        gameOperationName = detail.gameOperationName,
                         allGames = schedule,
                         availableGameDays = availableGameDays,
                         gameDayTitles = gameDayTitles,
@@ -125,6 +139,27 @@ class LeagueDetailViewModel @Inject constructor(
         else it
     }
     fun retry() = loadData()
+
+    fun toggleFavorite() {
+        viewModelScope.launch {
+            if (isFavorite.value) {
+                repository.removeFavorite("league", leagueId)
+            } else {
+                val state = _uiState.value
+                val nextOrder = repository.getMaxFavoriteSortOrder("league") + 1
+                repository.addFavorite(
+                    FavoriteEntity(
+                        type = "league",
+                        externalId = leagueId,
+                        name = state.leagueName,
+                        gameOperationSlug = state.gameOperationSlug,
+                        gameOperationName = state.gameOperationName,
+                        sortOrder = nextOrder,
+                    )
+                )
+            }
+        }
+    }
 }
 
 // ── Hilfsfunktionen ──────────────────────────────────────────
@@ -165,13 +200,14 @@ fun LeagueDetailScreen(
     viewModel: LeagueDetailViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isFavorite by viewModel.isFavorite.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Header mit Zurück-Button
+        // Header mit Zurück-Button und Favoriten-Stern
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(end = 16.dp),
+                .padding(end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) {
@@ -184,6 +220,14 @@ fun LeagueDetailScreen(
                 maxLines = 1,
                 modifier = Modifier.weight(1f),
             )
+            IconButton(onClick = { viewModel.toggleFavorite() }) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                    contentDescription = if (isFavorite) "Favorit entfernen" else "Als Favorit markieren",
+                    tint = if (isFavorite) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         when {
@@ -398,16 +442,16 @@ private fun TableTab(table: List<TableEntry>) {
                 modifier = Modifier.padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                tableHeader("#", 28.dp)
-                tableHeader("Team", 170.dp, TextAlign.Start)
-                tableHeader("Sp", 32.dp)
-                tableHeader("S", 28.dp)
-                tableHeader("SO", 28.dp)
-                tableHeader("NO", 28.dp)
-                tableHeader("N", 28.dp)
-                tableHeader("Tore", 64.dp)
-                tableHeader("Diff", 44.dp)
-                tableHeader("Pkt", 40.dp)
+                TableHeader("#", 28.dp)
+                TableHeader("Team", 170.dp, TextAlign.Start)
+                TableHeader("Sp", 32.dp)
+                TableHeader("S", 28.dp)
+                TableHeader("SO", 28.dp)
+                TableHeader("NO", 28.dp)
+                TableHeader("N", 28.dp)
+                TableHeader("Tore", 64.dp)
+                TableHeader("Diff", 44.dp)
+                TableHeader("Pkt", 40.dp)
             }
             HorizontalDivider()
             table.forEach { entry ->
@@ -421,16 +465,16 @@ private fun TableTab(table: List<TableEntry>) {
                     modifier = Modifier.padding(vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    tableCell("${entry.position}", 28.dp, fontWeight = FontWeight.Bold)
-                    tableCell(entry.teamName, 170.dp, textAlign = TextAlign.Start, fontWeight = FontWeight.Medium, maxLines = 1)
-                    tableCell("${entry.games}", 32.dp)
-                    tableCell("${entry.won}", 28.dp)
-                    tableCell("${entry.wonOt}", 28.dp)
-                    tableCell("${entry.lostOt}", 28.dp)
-                    tableCell("${entry.lost}", 28.dp)
-                    tableCell("${entry.goalsScored}:${entry.goalsReceived}", 64.dp)
-                    tableCell(diffText, 44.dp, color = diffColor, fontWeight = FontWeight.Medium)
-                    tableCell("${entry.points}", 40.dp, fontWeight = FontWeight.Bold)
+                    TableCell("${entry.position}", 28.dp, fontWeight = FontWeight.Bold)
+                    TableCell(entry.teamName, 170.dp, textAlign = TextAlign.Start, fontWeight = FontWeight.Medium, maxLines = 1)
+                    TableCell("${entry.games}", 32.dp)
+                    TableCell("${entry.won}", 28.dp)
+                    TableCell("${entry.wonOt}", 28.dp)
+                    TableCell("${entry.lostOt}", 28.dp)
+                    TableCell("${entry.lost}", 28.dp)
+                    TableCell("${entry.goalsScored}:${entry.goalsReceived}", 64.dp)
+                    TableCell(diffText, 44.dp, color = diffColor, fontWeight = FontWeight.Medium)
+                    TableCell("${entry.points}", 40.dp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -438,7 +482,7 @@ private fun TableTab(table: List<TableEntry>) {
 }
 
 @Composable
-private fun RowScope.tableHeader(
+private fun RowScope.TableHeader(
     text: String,
     width: androidx.compose.ui.unit.Dp,
     textAlign: TextAlign = TextAlign.Center,
@@ -454,7 +498,7 @@ private fun RowScope.tableHeader(
 }
 
 @Composable
-private fun RowScope.tableCell(
+private fun RowScope.TableCell(
     text: String,
     width: androidx.compose.ui.unit.Dp,
     textAlign: TextAlign = TextAlign.Center,

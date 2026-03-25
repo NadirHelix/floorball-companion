@@ -2,11 +2,13 @@ package de.floorballcompanion.ui.favorites
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SportsHockey
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,6 +40,17 @@ class FavoritesViewModel @Inject constructor(
     fun removeFavorite(favorite: FavoriteEntity) {
         viewModelScope.launch {
             repository.removeFavorite(favorite.type, favorite.externalId)
+        }
+    }
+
+    fun moveFavorite(type: String, list: List<FavoriteEntity>, fromIndex: Int, toIndex: Int) {
+        if (toIndex < 0 || toIndex >= list.size) return
+        viewModelScope.launch {
+            // Swap sort orders
+            val itemA = list[fromIndex]
+            val itemB = list[toIndex]
+            repository.updateFavoriteSortOrder(type, itemA.externalId, toIndex)
+            repository.updateFavoriteSortOrder(type, itemB.externalId, fromIndex)
         }
     }
 }
@@ -84,7 +97,6 @@ fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
                 }
             }
         } else {
-            // Gruppiert nach Typ
             val grouped = favorites.groupBy { it.type }
 
             LazyColumn(
@@ -98,10 +110,14 @@ fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
                             title = "Ligen (${leagues.size})",
                         )
                     }
-                    items(leagues, key = { "league_${it.externalId}" }) { fav ->
+                    itemsIndexed(leagues, key = { _, fav -> "league_${fav.externalId}" }) { index, fav ->
                         FavoriteCard(
                             favorite = fav,
                             onRemove = { viewModel.removeFavorite(fav) },
+                            canMoveUp = index > 0,
+                            canMoveDown = index < leagues.size - 1,
+                            onMoveUp = { viewModel.moveFavorite("league", leagues, index, index - 1) },
+                            onMoveDown = { viewModel.moveFavorite("league", leagues, index, index + 1) },
                         )
                     }
                 }
@@ -114,10 +130,14 @@ fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
                             title = "Teams (${teams.size})",
                         )
                     }
-                    items(teams, key = { "team_${it.externalId}" }) { fav ->
+                    itemsIndexed(teams, key = { _, fav -> "team_${fav.externalId}" }) { index, fav ->
                         FavoriteCard(
                             favorite = fav,
                             onRemove = { viewModel.removeFavorite(fav) },
+                            canMoveUp = index > 0,
+                            canMoveDown = index < teams.size - 1,
+                            onMoveUp = { viewModel.moveFavorite("team", teams, index, index - 1) },
+                            onMoveDown = { viewModel.moveFavorite("team", teams, index, index + 1) },
                         )
                     }
                 }
@@ -159,6 +179,10 @@ private fun SectionHeader(
 private fun FavoriteCard(
     favorite: FavoriteEntity,
     onRemove: () -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -168,7 +192,7 @@ private fun FavoriteCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -189,6 +213,32 @@ private fun FavoriteCard(
                         text = lName,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // Reihenfolge-Buttons
+            Column {
+                IconButton(
+                    onClick = onMoveUp,
+                    enabled = canMoveUp,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Nach oben",
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onMoveDown,
+                    enabled = canMoveDown,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Nach unten",
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }

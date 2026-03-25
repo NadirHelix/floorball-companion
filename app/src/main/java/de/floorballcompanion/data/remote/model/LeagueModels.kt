@@ -56,5 +56,4 @@ data class LeagueDetail(
     @SerialName("period_length") val periodLength: Int,
     @SerialName("game_day_numbers") val gameDayNumbers: List<Int> = emptyList(),
     @SerialName("game_day_titles") val gameDayTitles: List<GameDayTitle> = emptyList(),
-    @SerialName("similar_leagues") val similarLeagues: List<LeaguePreview> = emptyList(),
 )
