@@ -20,6 +20,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import de.floorballcompanion.data.local.entity.FavoriteEntity
+import de.floorballcompanion.ui.components.TeamLogo
 import de.floorballcompanion.data.remote.model.TableEntry
 import de.floorballcompanion.data.repository.FloorballRepository
 import kotlinx.coroutines.flow.*
@@ -254,7 +255,8 @@ private fun MiniTable(entries: List<TableEntry>) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("#", Modifier.width(24.dp), style = headerStyle(), textAlign = TextAlign.Center)
-            Text("Team", Modifier.width(180.dp), style = headerStyle())
+            Spacer(Modifier.width(24.dp)) // Platz für Logo
+            Text("Team", Modifier.width(160.dp), style = headerStyle())
             Text("Sp", Modifier.width(32.dp), style = headerStyle(), textAlign = TextAlign.Center)
             Text("S", Modifier.width(28.dp), style = headerStyle(), textAlign = TextAlign.Center)
             Text("N", Modifier.width(28.dp), style = headerStyle(), textAlign = TextAlign.Center)
@@ -277,9 +279,15 @@ private fun MiniTable(entries: List<TableEntry>) {
                     style = cellStyle(),
                     textAlign = TextAlign.Center,
                 )
+                TeamLogo(
+                    logoUrl = entry.teamLogo,
+                    contentDescription = entry.teamName,
+                    size = 18.dp,
+                )
+                Spacer(Modifier.width(4.dp))
                 Text(
                     entry.teamName,
-                    Modifier.width(180.dp),
+                    Modifier.width(160.dp),
                     style = cellStyle(),
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,

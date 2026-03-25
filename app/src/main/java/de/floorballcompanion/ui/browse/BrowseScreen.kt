@@ -21,7 +21,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import de.floorballcompanion.data.local.entity.FavoriteEntity
+import de.floorballcompanion.ui.components.resolveLogoUrl
 import de.floorballcompanion.data.remote.model.GameOperation
 import de.floorballcompanion.data.remote.model.LeaguePreview
 import de.floorballcompanion.data.repository.FloorballRepository
@@ -249,6 +256,22 @@ private fun OperationCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Verbandslogo
+            val logoUrl = resolveLogoUrl(operation.logoUrl)
+            if (logoUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(logoUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = operation.name,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Fit,
+                )
+                Spacer(Modifier.width(12.dp))
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = operation.name,

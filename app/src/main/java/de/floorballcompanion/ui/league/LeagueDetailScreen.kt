@@ -25,6 +25,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import de.floorballcompanion.data.local.entity.FavoriteEntity
+import de.floorballcompanion.ui.components.TeamLogo
 import de.floorballcompanion.data.remote.model.GameDayTitle
 import de.floorballcompanion.data.remote.model.ScheduledGame
 import de.floorballcompanion.data.remote.model.ScorerEntry
@@ -382,14 +383,24 @@ private fun GameCard(game: ScheduledGame) {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = game.homeTeamName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
+                // Home-Team mit Logo
+                Row(
                     modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Start,
-                    maxLines = 2,
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TeamLogo(
+                        logoUrl = game.homeTeamLogo,
+                        contentDescription = game.homeTeamName,
+                        size = 28.dp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = game.homeTeamName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 2,
+                    )
+                }
                 if (hasResult) {
                     Text(
                         text = "${game.homeGoals} : ${game.guestGoals}",
@@ -399,20 +410,33 @@ private fun GameCard(game: ScheduledGame) {
                     )
                 } else {
                     Text(
-                        text = "vs",
+                        text = "–",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 12.dp),
                     )
                 }
-                Text(
-                    text = game.guestTeamName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
+                // Gast-Team mit Logo
+                Row(
                     modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.End,
-                    maxLines = 2,
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    Text(
+                        text = game.guestTeamName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 2,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    TeamLogo(
+                        logoUrl = game.guestTeamLogo,
+                        contentDescription = game.guestTeamName,
+                        size = 28.dp,
+                    )
+                }
             }
         }
     }
@@ -443,6 +467,7 @@ private fun TableTab(table: List<TableEntry>) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TableHeader("#", 28.dp)
+                Spacer(Modifier.width(24.dp)) // Platz für Logo
                 TableHeader("Team", 170.dp, TextAlign.Start)
                 TableHeader("Sp", 32.dp)
                 TableHeader("S", 28.dp)
@@ -466,6 +491,11 @@ private fun TableTab(table: List<TableEntry>) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TableCell("${entry.position}", 28.dp, fontWeight = FontWeight.Bold)
+                    TeamLogo(
+                        logoUrl = entry.teamLogo,
+                        contentDescription = entry.teamName,
+                        size = 20.dp,
+                    )
                     TableCell(entry.teamName, 170.dp, textAlign = TextAlign.Start, fontWeight = FontWeight.Medium, maxLines = 1)
                     TableCell("${entry.games}", 32.dp)
                     TableCell("${entry.won}", 28.dp)
