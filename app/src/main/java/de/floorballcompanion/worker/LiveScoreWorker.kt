@@ -136,7 +136,7 @@ class LiveScoreWorker @AssistedInject constructor(
     @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     private fun sendGoalNotification(game: GameDetail, goal: GameEvent) {
         val score = "${goal.homeGoals ?: "?"}:${goal.guestGoals ?: "?"}"
-        val title = "⚽ Tor! ${game.homeTeamName} $score ${game.guestTeamName}"
+        val title = "\uD83E\uDD45 Tor! ${game.homeTeamName} $score ${game.guestTeamName}"
         val body = "${goal.time} — ${if (goal.eventTeam == "home") game.homeTeamName else game.guestTeamName}"
 
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
@@ -149,7 +149,7 @@ class LiveScoreWorker @AssistedInject constructor(
         )
 
         val notification = NotificationCompat.Builder(applicationContext, FloorballApp.CHANNEL_LIVE)
-            .setSmallIcon(R.drawable.ic_launcher_foreground) // TODO: eigenes Icon
+            .setSmallIcon(R.drawable.placeholder_logo)
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

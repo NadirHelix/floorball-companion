@@ -28,6 +28,9 @@ import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import de.floorballcompanion.data.local.entity.FavoriteEntity
+import de.floorballcompanion.domain.LeagueGroupingService
+import de.floorballcompanion.domain.model.LeagueGroup
+import de.floorballcompanion.domain.model.LeaguePhase
 import de.floorballcompanion.ui.components.resolveLogoUrl
 import de.floorballcompanion.data.remote.model.GameOperation
 import de.floorballcompanion.data.remote.model.LeaguePreview
@@ -41,6 +44,7 @@ import javax.inject.Inject
 @HiltViewModel
 class BrowseViewModel @Inject constructor(
     private val repository: FloorballRepository,
+    private val groupingService: LeagueGroupingService,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowseUiState())
@@ -105,15 +109,16 @@ class BrowseViewModel @Inject constructor(
             try {
                 val leagues = repository.getLeaguesByOperation(operation.id)
                     .filter { l -> l.name.length > 2 }
+                val groups = groupingService.groupLeagues(leagues)
                 _uiState.update {
                     it.copy(
                         leaguesLoading = false,
-                        leaguesForOperation = leagues.sortedBy { l -> l.name },
+                        leagueGroupsForOperation = groups,
                     )
                 }
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(leaguesLoading = false, leaguesForOperation = emptyList())
+                    it.copy(leaguesLoading = false, leagueGroupsForOperation = emptyList())
                 }
             }
         }
@@ -149,7 +154,7 @@ data class BrowseUiState(
     val gameOperations: List<GameOperation> = emptyList(),
     val expandedOperationId: Int? = null,
     val leaguesLoading: Boolean = false,
-    val leaguesForOperation: List<LeaguePreview> = emptyList(),
+    val leagueGroupsForOperation: List<LeagueGroup> = emptyList(),
 )
 
 // ── Screen ───────────────────────────────────────────────────
@@ -210,8 +215,8 @@ fun BrowseScreen(
                         operation = operation,
                         isExpanded = uiState.expandedOperationId == operation.id,
                         leaguesLoading = uiState.leaguesLoading && uiState.expandedOperationId == operation.id,
-                        leagues = if (uiState.expandedOperationId == operation.id)
-                            uiState.leaguesForOperation else emptyList(),
+                        leagueGroups = if (uiState.expandedOperationId == operation.id)
+                            uiState.leagueGroupsForOperation else emptyList(),
                         favoriteIds = favoriteIds,
                         favoriteCount = favCountBySlug[operation.path] ?: 0,
                         onToggleExpand = { viewModel.loadLeaguesForOperation(operation) },
@@ -231,7 +236,7 @@ private fun OperationCard(
     operation: GameOperation,
     isExpanded: Boolean,
     leaguesLoading: Boolean,
-    leagues: List<LeaguePreview>,
+    leagueGroups: List<LeagueGroup>,
     favoriteIds: Set<Int>,
     favoriteCount: Int,
     onToggleExpand: () -> Unit,
@@ -312,27 +317,35 @@ private fun OperationCard(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     }
-                } else if (leagues.isEmpty()) {
+                } else if (leagueGroups.isEmpty()) {
                     Text(
                         text = "Keine Ligen gefunden",
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    // Ligen nach GF/KF gruppieren, Favoriten jeweils oben
-                    val gfLeagues = remember(leagues, favoriteIds) {
-                        leagues.filter { it.fieldSize == "GF" }
-                            .sortedByDescending { it.id in favoriteIds }
+                    // Alle Hauptligen aus den Gruppen flach sammeln (für GF/KF-Gruppierung)
+                    val allMainLeagues = remember(leagueGroups) {
+                        leagueGroups.map { it.mainLeague }
                     }
-                    val kfLeagues = remember(leagues, favoriteIds) {
-                        leagues.filter { it.fieldSize != "GF" }
-                            .sortedByDescending { it.id in favoriteIds }
+                    val gfGroups = remember(leagueGroups) {
+                        leagueGroups.filter { it.mainLeague.fieldSize == "GF" }
+                    }
+                    val kfGroups = remember(leagueGroups) {
+                        leagueGroups.filter { it.mainLeague.fieldSize != "GF" }
                     }
 
-                    if (gfLeagues.isNotEmpty() && kfLeagues.isNotEmpty()) {
-                        // Beide Feldgrößen vorhanden → Tabs
+                    // Sortierung: Gruppen mit Favoriten (in Haupt- oder Unterliga) oben
+                    fun List<LeagueGroup>.sortedByFavorites(): List<LeagueGroup> =
+                        sortedByDescending { group ->
+                            group.allLeagues.any { it.id in favoriteIds }
+                        }
+
+                    if (gfGroups.isNotEmpty() && kfGroups.isNotEmpty()) {
                         var selectedFieldTab by remember { mutableIntStateOf(0) }
-                        val tabs = listOf("Großfeld (${gfLeagues.size})", "Kleinfeld (${kfLeagues.size})")
+                        val gfCount = gfGroups.sumOf { it.allLeagues.size }
+                        val kfCount = kfGroups.sumOf { it.allLeagues.size }
+                        val tabs = listOf("Großfeld ($gfCount)", "Kleinfeld ($kfCount)")
 
                         TabRow(
                             selectedTabIndex = selectedFieldTab,
@@ -349,24 +362,24 @@ private fun OperationCard(
 
                         Spacer(Modifier.height(4.dp))
 
-                        val visibleLeagues = if (selectedFieldTab == 0) gfLeagues else kfLeagues
-                        visibleLeagues.forEach { league ->
-                            LeagueRow(
-                                league = league,
-                                isFavorite = league.id in favoriteIds,
-                                onToggleFavorite = { onToggleFavorite(league) },
-                                onClick = { onLeagueClick(league.id) },
+                        val visibleGroups = if (selectedFieldTab == 0)
+                            gfGroups.sortedByFavorites() else kfGroups.sortedByFavorites()
+                        visibleGroups.forEach { group ->
+                            LeagueGroupRow(
+                                group = group,
+                                favoriteIds = favoriteIds,
+                                onToggleFavorite = onToggleFavorite,
+                                onLeagueClick = onLeagueClick,
                             )
                         }
                     } else {
-                        // Nur eine Feldgröße → keine Tabs nötig
-                        val allSorted = if (gfLeagues.isNotEmpty()) gfLeagues else kfLeagues
-                        allSorted.forEach { league ->
-                            LeagueRow(
-                                league = league,
-                                isFavorite = league.id in favoriteIds,
-                                onToggleFavorite = { onToggleFavorite(league) },
-                                onClick = { onLeagueClick(league.id) },
+                        val allGroups = (gfGroups.ifEmpty { kfGroups }).sortedByFavorites()
+                        allGroups.forEach { group ->
+                            LeagueGroupRow(
+                                group = group,
+                                favoriteIds = favoriteIds,
+                                onToggleFavorite = onToggleFavorite,
+                                onLeagueClick = onLeagueClick,
                             )
                         }
                     }
@@ -376,12 +389,73 @@ private fun OperationCard(
     }
 }
 
-// ── Einzelne Liga-Zeile ──────────────────────────────────────
+// ── Liga-Gruppe (Hauptliga + aufklappbare Phasen) ────────────
+
+@Composable
+private fun LeagueGroupRow(
+    group: LeagueGroup,
+    favoriteIds: Set<Int>,
+    onToggleFavorite: (LeaguePreview) -> Unit,
+    onLeagueClick: (Int) -> Unit,
+) {
+    // Hauptliga
+    LeagueRow(
+        league = group.mainLeague,
+        isFavorite = group.mainLeague.id in favoriteIds,
+        hasRelated = group.hasPostSeason,
+        onToggleFavorite = { onToggleFavorite(group.mainLeague) },
+        onClick = { onLeagueClick(group.mainLeague.id) },
+    )
+
+    // Zugehörige Phasen (Playoffs, Playdowns, Relegation)
+    if (group.hasPostSeason) {
+        var phasesExpanded by remember { mutableStateOf(false) }
+
+        // Aufklapp-Zeile
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { phasesExpanded = !phasesExpanded }
+                .padding(start = 52.dp, end = 16.dp, top = 0.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = if (phasesExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (phasesExpanded) "Zuklappen" else "Phasen anzeigen",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = "${group.relatedLeagues.size} weitere Phase${if (group.relatedLeagues.size > 1) "n" else ""}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        AnimatedVisibility(visible = phasesExpanded) {
+            Column {
+                val mainIsFavorite = group.mainLeague.id in favoriteIds
+                group.relatedLeagues.forEach { (phase, league) ->
+                    PhaseLeagueRow(
+                        league = league,
+                        phase = phase,
+                        parentIsFavorite = mainIsFavorite,
+                        onClick = { onLeagueClick(league.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Einzelne Liga-Zeile (Hauptliga) ─────────────────────────
 
 @Composable
 private fun LeagueRow(
     league: LeaguePreview,
     isFavorite: Boolean,
+    hasRelated: Boolean = false,
     onToggleFavorite: () -> Unit,
     onClick: () -> Unit,
 ) {
@@ -435,6 +509,70 @@ private fun LeagueRow(
                 contentDescription = if (isFavorite) "Favorit entfernen" else "Als Favorit markieren",
                 tint = if (isFavorite) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ── Phasen-Liga-Zeile (eingerückt, mit Phase-Badge) ─────────
+
+@Composable
+private fun PhaseLeagueRow(
+    league: LeaguePreview,
+    phase: LeaguePhase,
+    parentIsFavorite: Boolean,
+    onClick: () -> Unit,
+) {
+    val phaseLabel = when (phase) {
+        LeaguePhase.PLAYOFF -> "Playoffs"
+        LeaguePhase.PLAYDOWN -> "Playdowns"
+        LeaguePhase.RELEGATION -> "Relegation"
+        LeaguePhase.REGULAR -> ""
+    }
+    val phaseColor = when (phase) {
+        LeaguePhase.PLAYOFF -> MaterialTheme.colorScheme.primary
+        LeaguePhase.PLAYDOWN -> MaterialTheme.colorScheme.tertiary
+        LeaguePhase.RELEGATION -> MaterialTheme.colorScheme.error
+        LeaguePhase.REGULAR -> MaterialTheme.colorScheme.onSurface
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(start = 52.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Phase-Badge
+        Surface(
+            shape = MaterialTheme.shapes.small,
+            color = phaseColor.copy(alpha = 0.12f),
+        ) {
+            Text(
+                text = phaseLabel,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = phaseColor,
+            )
+        }
+
+        Spacer(Modifier.width(8.dp))
+
+        Text(
+            text = league.name,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+        )
+
+        // Favoriten-Status vom Parent erben (kein eigener Toggle)
+        if (parentIsFavorite) {
+            Icon(
+                imageVector = Icons.Filled.Star,
+                contentDescription = "Favorit (via Hauptliga)",
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                modifier = Modifier.size(18.dp).padding(end = 4.dp),
             )
         }
     }

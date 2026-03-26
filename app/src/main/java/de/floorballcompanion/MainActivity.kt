@@ -11,7 +11,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -24,6 +26,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import de.floorballcompanion.ui.browse.BrowseScreen
 import de.floorballcompanion.ui.dashboard.DashboardScreen
 import de.floorballcompanion.ui.favorites.FavoritesScreen
+import de.floorballcompanion.ui.game.GameDetailScreen
 import de.floorballcompanion.ui.league.LeagueDetailScreen
 import de.floorballcompanion.ui.theme.FloorballCompanionTheme
 import de.floorballcompanion.worker.LiveScoreWorker
@@ -62,17 +65,32 @@ fun MainApp() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
     val isOnDetailScreen = currentDestination?.route?.startsWith("league_detail/") == true
+            || currentDestination?.route?.startsWith("game_detail/") == true
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Floorball Companion") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                ),
-            )
+            if (!isOnDetailScreen) {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                painter = androidx.compose.ui.res.painterResource(R.drawable.placeholder_logo),
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = androidx.compose.ui.graphics.Color.Unspecified,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Floorball Companion")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                )
+            }
         },
+        contentWindowInsets = if (isOnDetailScreen) WindowInsets(0) else ScaffoldDefaults.contentWindowInsets,
         bottomBar = {
             if (!isOnDetailScreen) {
                 NavigationBar {
@@ -127,7 +145,18 @@ fun MainApp() {
                 route = "league_detail/{leagueId}",
                 arguments = listOf(navArgument("leagueId") { type = NavType.IntType }),
             ) {
-                LeagueDetailScreen(onBack = { navController.popBackStack() })
+                LeagueDetailScreen(
+                    onBack = { navController.popBackStack() },
+                    onGameClick = { gameId ->
+                        navController.navigate("game_detail/$gameId")
+                    },
+                )
+            }
+            composable(
+                route = "game_detail/{gameId}",
+                arguments = listOf(navArgument("gameId") { type = NavType.IntType }),
+            ) {
+                GameDetailScreen(onBack = { navController.popBackStack() })
             }
         }
     }
