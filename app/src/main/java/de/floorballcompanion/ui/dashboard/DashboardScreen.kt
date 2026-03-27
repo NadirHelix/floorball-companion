@@ -1,5 +1,6 @@
 package de.floorballcompanion.ui.dashboard
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,6 +50,10 @@ class DashboardViewModel @Inject constructor(
 
     val favoriteLeagues: StateFlow<List<FavoriteEntity>> =
         repository.observeFavoriteLeagues()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val favoriteTeams: StateFlow<List<FavoriteEntity>> =
+        repository.observeFavoriteTeams()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
@@ -113,12 +118,19 @@ class DashboardViewModel @Inject constructor(
 // ── Screen ───────────────────────────────────────────────────
 
 @Composable
-fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
+fun DashboardScreen(
+    onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
+    onLeagueClick: (leagueId: Int) -> Unit = {},
+    viewModel: DashboardViewModel = hiltViewModel(),
+) {
     val leagueTables by viewModel.leagueTables.collectAsState()
     val favoriteLeagues by viewModel.favoriteLeagues.collectAsState()
+    val favoriteTeams by viewModel.favoriteTeams.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
 
-    if (favoriteLeagues.isEmpty()) {
+    val hasFavorites = favoriteLeagues.isNotEmpty() || favoriteTeams.isNotEmpty()
+
+    if (!hasFavorites) {
         // Leerer Zustand
         Box(
             modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -138,7 +150,7 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Gehe zum Tab \"Ligen\", um Verbände zu\ndurchsuchen und deine Lieblingsligen\nals Favoriten zu markieren.",
+                    text = "Gehe zum Tab \"Ligen\", um Verbände zu\ndurchsuchen und deine Lieblingsligen\noder Teams als Favoriten zu markieren.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -172,8 +184,61 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                 }
             }
 
+            // Team favorites (above league tables)
+            if (favoriteTeams.isNotEmpty()) {
+                item(key = "team-favorites") {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        favoriteTeams.forEach { team ->
+                            TeamFavoriteCard(
+                                favorite = team,
+                                onClick = { onTeamClick(team.externalId, team.leagueId ?: 0) },
+                            )
+                            Spacer(Modifier.height(6.dp))
+                        }
+                    }
+                }
+            }
+
             items(leagueTables, key = { it.favorite.externalId }) { state ->
-                LeagueTableCard(state)
+                LeagueTableCard(state, onLeagueClick)
+            }
+        }
+    }
+}
+
+// ── Team-Favoriten-Card ─────────────────────────────────────
+
+@Composable
+private fun TeamFavoriteCard(
+    favorite: FavoriteEntity,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TeamLogo(favorite.logoUrl, favorite.name, size = 40.dp)
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(
+                    favorite.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                favorite.leagueName?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -182,11 +247,12 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
 // ── Liga-Tabellen-Card ───────────────────────────────────────
 
 @Composable
-private fun LeagueTableCard(state: LeagueTableState) {
+private fun LeagueTableCard(state: LeagueTableState, onLeagueClick: (Int) -> Unit = {}) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clickable { onLeagueClick(state.favorite.externalId) },
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             // Header

@@ -54,9 +54,13 @@ class BrowseViewModel @Inject constructor(
     private val _favoriteLeagueIds = MutableStateFlow<Set<Int>>(emptySet())
     val favoriteLeagueIds = _favoriteLeagueIds.asStateFlow()
 
-    // Anzahl Favoriten pro Verbands-Slug
+    // Anzahl Liga-Favoriten pro Verbands-Slug
     private val _favoriteCountBySlug = MutableStateFlow<Map<String, Int>>(emptyMap())
     val favoriteCountBySlug = _favoriteCountBySlug.asStateFlow()
+
+    // Anzahl Team-Favoriten pro Verbands-Slug
+    private val _teamFavoriteCountBySlug = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val teamFavoriteCountBySlug = _teamFavoriteCountBySlug.asStateFlow()
 
     init {
         loadOperations()
@@ -68,6 +72,14 @@ class BrowseViewModel @Inject constructor(
             repository.observeFavoriteLeagues().collect { favs ->
                 _favoriteLeagueIds.value = favs.map { it.externalId }.toSet()
                 _favoriteCountBySlug.value = favs
+                    .mapNotNull { it.gameOperationSlug }
+                    .groupingBy { it }
+                    .eachCount()
+            }
+        }
+        viewModelScope.launch {
+            repository.observeFavoriteTeams().collect { favs ->
+                _teamFavoriteCountBySlug.value = favs
                     .mapNotNull { it.gameOperationSlug }
                     .groupingBy { it }
                     .eachCount()
@@ -167,6 +179,7 @@ fun BrowseScreen(
     val uiState by viewModel.uiState.collectAsState()
     val favoriteIds by viewModel.favoriteLeagueIds.collectAsState()
     val favCountBySlug by viewModel.favoriteCountBySlug.collectAsState()
+    val teamFavCountBySlug by viewModel.teamFavoriteCountBySlug.collectAsState()
 
     when {
         uiState.isLoading -> {
@@ -185,9 +198,9 @@ fun BrowseScreen(
         }
         else -> {
             // Verbände mit Favoriten nach oben sortieren
-            val sortedOperations = remember(uiState.gameOperations, favCountBySlug) {
+            val sortedOperations = remember(uiState.gameOperations, favCountBySlug, teamFavCountBySlug) {
                 uiState.gameOperations.sortedByDescending { op ->
-                    (favCountBySlug[op.path] ?: 0) > 0
+                    ((favCountBySlug[op.path] ?: 0) + (teamFavCountBySlug[op.path] ?: 0)) > 0
                 }
             }
 
@@ -219,6 +232,7 @@ fun BrowseScreen(
                             uiState.leagueGroupsForOperation else emptyList(),
                         favoriteIds = favoriteIds,
                         favoriteCount = favCountBySlug[operation.path] ?: 0,
+                        teamFavoriteCount = teamFavCountBySlug[operation.path] ?: 0,
                         onToggleExpand = { viewModel.loadLeaguesForOperation(operation) },
                         onToggleFavorite = { viewModel.toggleLeagueFavorite(it) },
                         onLeagueClick = onLeagueClick,
@@ -239,6 +253,7 @@ private fun OperationCard(
     leagueGroups: List<LeagueGroup>,
     favoriteIds: Set<Int>,
     favoriteCount: Int,
+    teamFavoriteCount: Int = 0,
     onToggleExpand: () -> Unit,
     onToggleFavorite: (LeaguePreview) -> Unit,
     onLeagueClick: (Int) -> Unit,
@@ -294,6 +309,14 @@ private fun OperationCard(
                             text = " ($favoriteCount ★)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    if (teamFavoriteCount > 0) {
+                        Text(
+                            text = " ($teamFavoriteCount ★)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = de.floorballcompanion.ui.team.TeamFavoriteColor,
                             fontWeight = FontWeight.Bold,
                         )
                     }

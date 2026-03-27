@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface FavoriteDao {
 
-    @Query("SELECT * FROM favorites ORDER BY type, sortOrder, name")
+    @Query("SELECT * FROM favorites ORDER BY CASE type WHEN 'team' THEN 0 WHEN 'league' THEN 1 WHEN 'club' THEN 2 END, sortOrder, name")
     fun observeAll(): Flow<List<FavoriteEntity>>
 
     @Query("SELECT * FROM favorites WHERE type = :type ORDER BY sortOrder, name")

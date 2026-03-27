@@ -3,6 +3,7 @@ package de.floorballcompanion.data.local
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import de.floorballcompanion.data.local.dao.CacheDao
+import de.floorballcompanion.data.local.dao.ClubDao
 import de.floorballcompanion.data.local.dao.FavoriteDao
 import de.floorballcompanion.data.local.entity.*
 
@@ -11,11 +12,15 @@ import de.floorballcompanion.data.local.entity.*
         FavoriteEntity::class,
         CachedTableEntry::class,
         CachedGameEntity::class,
+        TeamLeagueMapping::class,
+        ClubEntity::class,
+        ClubTeamEntity::class,
     ],
-    version = 2,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun favoriteDao(): FavoriteDao
     abstract fun cacheDao(): CacheDao
+    abstract fun clubDao(): ClubDao
 }

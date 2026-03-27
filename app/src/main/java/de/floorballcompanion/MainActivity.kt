@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -28,6 +29,11 @@ import de.floorballcompanion.ui.dashboard.DashboardScreen
 import de.floorballcompanion.ui.favorites.FavoritesScreen
 import de.floorballcompanion.ui.game.GameDetailScreen
 import de.floorballcompanion.ui.league.LeagueDetailScreen
+import de.floorballcompanion.ui.club.ClubDetailScreen
+import de.floorballcompanion.ui.club.ClubListScreen
+import de.floorballcompanion.ui.team.TeamScreen
+import java.net.URLEncoder
+import java.net.URLDecoder
 import de.floorballcompanion.ui.theme.FloorballCompanionTheme
 import de.floorballcompanion.worker.LiveScoreWorker
 
@@ -53,10 +59,11 @@ class MainActivity : ComponentActivity() {
 sealed class Screen(val route: String, val label: String) {
     data object Dashboard : Screen("dashboard", "Dashboard")
     data object Browse : Screen("browse", "Ligen")
+    data object Clubs : Screen("clubs", "Vereine")
     data object Favorites : Screen("favorites", "Favoriten")
 }
 
-val bottomNavItems = listOf(Screen.Dashboard, Screen.Browse, Screen.Favorites)
+val bottomNavItems = listOf(Screen.Dashboard, Screen.Browse, Screen.Clubs, Screen.Favorites)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,8 +71,12 @@ fun MainApp() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
-    val isOnDetailScreen = currentDestination?.route?.startsWith("league_detail/") == true
-            || currentDestination?.route?.startsWith("game_detail/") == true
+    val isOnDetailScreen = currentDestination?.route?.let { route ->
+        route.startsWith("league_detail/") ||
+            route.startsWith("game_detail/") ||
+            route.startsWith("team_detail/") ||
+            route.startsWith("club_detail/")
+    } == true
 
     Scaffold(
         topBar = {
@@ -115,6 +126,7 @@ fun MainApp() {
                                     imageVector = when (screen) {
                                         Screen.Dashboard -> Icons.Default.Home
                                         Screen.Browse -> Icons.Default.Search
+                                        Screen.Clubs -> Icons.Default.Groups
                                         Screen.Favorites -> Icons.Default.Star
                                     },
                                     contentDescription = screen.label,
@@ -132,7 +144,16 @@ fun MainApp() {
             startDestination = Screen.Dashboard.route,
             modifier = Modifier.padding(innerPadding),
         ) {
-            composable(Screen.Dashboard.route) { DashboardScreen() }
+            composable(Screen.Dashboard.route) {
+                DashboardScreen(
+                    onTeamClick = { teamId, leagueId ->
+                        navController.navigate("team_detail/$teamId/$leagueId")
+                    },
+                    onLeagueClick = { leagueId ->
+                        navController.navigate("league_detail/$leagueId")
+                    },
+                )
+            }
             composable(Screen.Browse.route) {
                 BrowseScreen(
                     onLeagueClick = { leagueId ->
@@ -140,7 +161,23 @@ fun MainApp() {
                     },
                 )
             }
-            composable(Screen.Favorites.route) { FavoritesScreen() }
+            composable(Screen.Clubs.route) {
+                ClubListScreen(
+                    onClubClick = { logoUrl ->
+                        navController.navigate("club_detail/${URLEncoder.encode(logoUrl, "UTF-8")}")
+                    },
+                )
+            }
+            composable(Screen.Favorites.route) {
+                FavoritesScreen(
+                    onTeamClick = { teamId, leagueId ->
+                        navController.navigate("team_detail/$teamId/$leagueId")
+                    },
+                    onLeagueClick = { leagueId ->
+                        navController.navigate("league_detail/$leagueId")
+                    },
+                )
+            }
             composable(
                 route = "league_detail/{leagueId}",
                 arguments = listOf(navArgument("leagueId") { type = NavType.IntType }),
@@ -150,13 +187,57 @@ fun MainApp() {
                     onGameClick = { gameId ->
                         navController.navigate("game_detail/$gameId")
                     },
+                    onTeamClick = { teamId, leagueId ->
+                        navController.navigate("team_detail/$teamId/$leagueId")
+                    },
                 )
             }
             composable(
                 route = "game_detail/{gameId}",
                 arguments = listOf(navArgument("gameId") { type = NavType.IntType }),
             ) {
-                GameDetailScreen(onBack = { navController.popBackStack() })
+                GameDetailScreen(
+                    onBack = { navController.popBackStack() },
+                    onTeamClick = { teamId, leagueId ->
+                        navController.navigate("team_detail/$teamId/$leagueId")
+                    },
+                )
+            }
+            composable(
+                route = "team_detail/{teamId}/{leagueId}",
+                arguments = listOf(
+                    navArgument("teamId") { type = NavType.IntType },
+                    navArgument("leagueId") { type = NavType.IntType },
+                ),
+            ) {
+                TeamScreen(
+                    onBack = { navController.popBackStack() },
+                    onGameClick = { gameId ->
+                        navController.navigate("game_detail/$gameId")
+                    },
+                    onLeagueClick = { leagueId ->
+                        navController.navigate("league_detail/$leagueId")
+                    },
+                    onTeamClick = { teamId, leagueId ->
+                        navController.navigate("team_detail/$teamId/$leagueId")
+                    },
+                    onClubClick = { logoUrl ->
+                        navController.navigate("club_detail/${URLEncoder.encode(logoUrl, "UTF-8")}")
+                    },
+                )
+            }
+            composable(
+                route = "club_detail/{clubLogoUrl}",
+                arguments = listOf(navArgument("clubLogoUrl") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                val encodedUrl = backStackEntry.arguments?.getString("clubLogoUrl") ?: ""
+                val decodedUrl = URLDecoder.decode(encodedUrl, "UTF-8")
+                ClubDetailScreen(
+                    onBack = { navController.popBackStack() },
+                    onTeamClick = { teamId, leagueId ->
+                        navController.navigate("team_detail/$teamId/$leagueId")
+                    },
+                )
             }
         }
     }

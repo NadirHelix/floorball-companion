@@ -14,3 +14,4 @@
 .cxx
 local.properties
 /.*/settings.local.json
+/internal

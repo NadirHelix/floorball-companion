@@ -10,6 +10,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import de.floorballcompanion.data.local.AppDatabase
 import de.floorballcompanion.data.local.dao.CacheDao
+import de.floorballcompanion.data.local.dao.ClubDao
 import de.floorballcompanion.data.local.dao.FavoriteDao
 import de.floorballcompanion.data.remote.SaisonmanagerApi
 import kotlinx.serialization.json.Json
@@ -74,4 +75,7 @@ object AppModule {
 
     @Provides
     fun provideCacheDao(db: AppDatabase): CacheDao = db.cacheDao()
+
+    @Provides
+    fun provideClubDao(db: AppDatabase): ClubDao = db.clubDao()
 }

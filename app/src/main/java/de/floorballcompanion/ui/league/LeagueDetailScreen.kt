@@ -226,7 +226,14 @@ class LeagueDetailViewModel @Inject constructor(
 
     private suspend fun loadRegularData(leagueId: Int, gameDayTitlesFromDetail: List<GameDayTitle>? = null) {
         val scheduleDeferred = viewModelScope.async { repository.getSchedule(leagueId) }
-        val tableDeferred = viewModelScope.async { repository.refreshTable(leagueId) }
+        val state = _uiState.value
+        val tableDeferred = viewModelScope.async {
+            repository.refreshTableWithClubDiscovery(
+                leagueId = leagueId,
+                leagueName = state.leagueName,
+                gameOperationName = state.gameOperationName ?: "",
+            )
+        }
         val scorerDeferred = viewModelScope.async { repository.getScorer(leagueId) }
 
         val schedule = scheduleDeferred.await()
@@ -451,12 +458,13 @@ private fun isTeamTbd(game: ScheduledGame, isHome: Boolean): Boolean {
 fun LeagueDetailScreen(
     onBack: () -> Unit,
     onGameClick: (gameId: Int) -> Unit = {},
+    onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
     viewModel: LeagueDetailViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val isFavorite by viewModel.isFavorite.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         // Header
         Row(
             modifier = Modifier
@@ -535,9 +543,9 @@ fun LeagueDetailScreen(
                         CircularProgressIndicator()
                     }
                 } else if (uiState.isPlayoffPhase) {
-                    PlayoffPhaseContent(uiState, viewModel, onGameClick)
+                    PlayoffPhaseContent(uiState, viewModel, onGameClick, onTeamClick)
                 } else {
-                    RegularPhaseContent(uiState, viewModel, onGameClick)
+                    RegularPhaseContent(uiState, viewModel, onGameClick, onTeamClick)
                 }
             }
         }
@@ -551,7 +559,11 @@ private fun RegularPhaseContent(
     uiState: LeagueDetailUiState,
     viewModel: LeagueDetailViewModel,
     onGameClick: (Int) -> Unit,
+    onTeamClick: (Int, Int) -> Unit,
 ) {
+    // Aktuelle leagueId fuer Team-Klicks ermitteln
+    val currentLeagueId = uiState.phaseTabs.getOrNull(uiState.selectedPhaseIndex)?.leagueId ?: 0
+
     TabRow(selectedTabIndex = uiState.selectedTab) {
         listOf("Spieltag", "Tabelle", "Scorer").forEachIndexed { index, title ->
             Tab(
@@ -562,8 +574,8 @@ private fun RegularPhaseContent(
         }
     }
     when (uiState.selectedTab) {
-        0 -> GameDayTab(uiState, { viewModel.previousGameDay() }, { viewModel.nextGameDay() }, onGameClick)
-        1 -> TableTab(uiState.table)
+        0 -> GameDayTab(uiState, { viewModel.previousGameDay() }, { viewModel.nextGameDay() }, onGameClick, onTeamClick, currentLeagueId)
+        1 -> TableTab(uiState.table, onTeamClick, currentLeagueId)
         2 -> ScorerTab(uiState.scorers)
     }
 }
@@ -575,6 +587,7 @@ private fun PlayoffPhaseContent(
     uiState: LeagueDetailUiState,
     viewModel: LeagueDetailViewModel,
     onGameClick: (Int) -> Unit,
+    onTeamClick: (Int, Int) -> Unit,
 ) {
     val tabs = listOf("Runden", "Scorer")
     TabRow(selectedTabIndex = uiState.selectedTab) {
@@ -993,6 +1006,8 @@ private fun GameDayTab(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onGameClick: (Int) -> Unit,
+    onTeamClick: (Int, Int) -> Unit = { _, _ -> },
+    currentLeagueId: Int = 0,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         val dayNumber = uiState.currentGameDayNumber
@@ -1038,7 +1053,7 @@ private fun GameDayTab(
                 contentPadding = PaddingValues(vertical = 8.dp),
             ) {
                 items(uiState.gamesForCurrentDay, key = { it.resolvedGameId }) { game ->
-                    GameCard(game, onGameClick)
+                    GameCard(game, onGameClick, onTeamClick, currentLeagueId)
                 }
             }
         }
@@ -1048,7 +1063,12 @@ private fun GameDayTab(
 // -- Game Card (mit Drittelergebnissen + n.V./n.PS.) --------------------------
 
 @Composable
-private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
+private fun GameCard(
+    game: ScheduledGame,
+    onGameClick: (Int) -> Unit = {},
+    onTeamClick: (Int, Int) -> Unit = { _, _ -> },
+    leagueId: Int = 0,
+) {
     val dateDisplay = remember(game.date) {
         parseDate(game.date)?.format(deDotDateFmt) ?: game.date
     }
@@ -1107,7 +1127,13 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
             ) {
                 // Home-Team
                 Row(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            if (!homeTbd && game.homeTeamId != 0 && leagueId != 0)
+                                Modifier.clickable { onTeamClick(game.homeTeamId, leagueId) }
+                            else Modifier
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TeamLogo(logoUrl = game.homeTeamLogo, contentDescription = homeName, size = 28.dp)
@@ -1155,7 +1181,13 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
 
                 // Gast-Team
                 Row(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            if (!guestTbd && game.guestTeamId != 0 && leagueId != 0)
+                                Modifier.clickable { onTeamClick(game.guestTeamId, leagueId) }
+                            else Modifier
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.End,
                 ) {
@@ -1180,7 +1212,11 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
 // -- Tabelle-Tab --------------------------------------------------------------
 
 @Composable
-private fun TableTab(table: List<TableEntry>) {
+private fun TableTab(
+    table: List<TableEntry>,
+    onTeamClick: (Int, Int) -> Unit = { _, _ -> },
+    leagueId: Int = 0,
+) {
     if (table.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Keine Tabellendaten vorhanden", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1242,6 +1278,7 @@ private fun TableTab(table: List<TableEntry>) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clickable { if (entry.teamId != 0 && leagueId != 0) onTeamClick(entry.teamId, leagueId) }
                     .padding(vertical = 5.dp, horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
