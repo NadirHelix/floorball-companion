@@ -14,8 +14,9 @@ class PlayoffService @Inject constructor() {
     /**
      * Gruppiert Playoff-Spiele in Runden mit Best-of-Serien.
      * Erkennt Rundenstruktur anhand series_title oder Teamanzahl.
+     * @param gameDayTitles optionale Spieltag-Titel aus LeagueDetail (gameDayNumber → Titel)
      */
-    fun buildRounds(games: List<ScheduledGame>): List<PlayoffRound> {
+    fun buildRounds(games: List<ScheduledGame>, gameDayTitles: Map<Int, String> = emptyMap()): List<PlayoffRound> {
         // Spiele ohne Spielnummer ausfiltern (Platzhalter)
         val validGames = games.filter { (it.gameNumber ?: 0) > 0 }
         if (validGames.isEmpty()) return emptyList()
@@ -26,12 +27,25 @@ class PlayoffService @Inject constructor() {
             return buildRoundsFromSeriesTitles(validGames)
         }
 
-        // Sonst: Spiele in Serien gruppieren (gleiche Team-Paarung)
+        // Wenn mehrere Spieltage vorhanden: pro Spieltag eine Runde
+        val gameDays = validGames.mapNotNull { it.gameDayNumber }.distinct().sorted()
+        if (gameDays.size > 1) {
+            return gameDays.map { day ->
+                val dayGames = validGames.filter { it.gameDayNumber == day }
+                val series = groupIntoSeries(dayGames)
+                val name = gameDayTitles[day]
+                    ?: if (series.isNotEmpty()) deriveRoundName(series.size) else "Spieltag $day"
+                PlayoffRound(name = name, series = series)
+            }
+        }
+
+        // Sonst: alle Spiele in eine Runde (gleiche Team-Paarung)
         val series = groupIntoSeries(validGames)
         if (series.isEmpty()) return emptyList()
 
-        // Alle Serien gehoeren zur selben Runde (game_day ist fuer Playoffs nicht zuverlaessig)
-        val roundName = deriveRoundName(series.size)
+        val singleDay = validGames.firstOrNull()?.gameDayNumber
+        val roundName = (if (singleDay != null) gameDayTitles[singleDay] else null)
+            ?: deriveRoundName(series.size)
         return listOf(PlayoffRound(name = roundName, series = series))
     }
 
@@ -193,6 +207,38 @@ class PlayoffService @Inject constructor() {
             higherSeedWins = higherWins,
             lowerSeedWins = lowerWins,
         )
+    }
+
+    /**
+     * Baut Pokal-Runden mit pokalspezifischer Benennung.
+     * >8 Serien → "X. Runde", 8 → "Achtelfinale", 4 → "Viertelfinale", 2 → "Final 4", 1 → "Finale"
+     */
+    fun buildCupRounds(games: List<ScheduledGame>): List<PlayoffRound> {
+        val validGames = games.filter { (it.gameNumber ?: 0) > 0 }
+        if (validGames.isEmpty()) return emptyList()
+
+        val gameDays = validGames.mapNotNull { it.gameDayNumber }.distinct().sorted()
+
+        if (gameDays.size <= 1) {
+            val series = groupIntoSeries(validGames)
+            if (series.isEmpty()) return emptyList()
+            return listOf(PlayoffRound(name = deriveCupRoundName(0, series.size), series = series))
+        }
+
+        return gameDays.mapIndexed { index, day ->
+            val dayGames = validGames.filter { it.gameDayNumber == day }
+            val series = groupIntoSeries(dayGames)
+            PlayoffRound(name = deriveCupRoundName(index, series.size), series = series)
+        }
+    }
+
+    private fun deriveCupRoundName(roundIndex: Int, seriesCount: Int): String = when {
+        seriesCount >= 9 -> "${roundIndex + 1}. Runde"
+        seriesCount == 8 -> "Achtelfinale"
+        seriesCount == 4 -> "Viertelfinale"
+        seriesCount == 2 -> "Final 4"
+        seriesCount == 1 -> "Finale"
+        else -> "${roundIndex + 1}. Runde"
     }
 
     private fun deriveRoundName(seriesCount: Int): String = when (seriesCount) {

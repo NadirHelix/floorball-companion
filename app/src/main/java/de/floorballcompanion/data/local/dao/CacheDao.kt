@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import de.floorballcompanion.data.local.entity.CachedGameEntity
 import de.floorballcompanion.data.local.entity.CachedTableEntry
+import de.floorballcompanion.data.local.entity.TeamLeagueMapping
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -32,4 +33,15 @@ interface CacheDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertGames(games: List<CachedGameEntity>)
+
+    // ── Team-League Mapping ────────────────────────────────
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTeamLeagueMappings(mappings: List<TeamLeagueMapping>)
+
+    @Query("SELECT * FROM team_league_mapping WHERE teamId = :teamId")
+    suspend fun getLeaguesForTeam(teamId: Int): List<TeamLeagueMapping>
+
+    @Query("SELECT * FROM team_league_mapping WHERE teamId = :teamId")
+    fun observeLeaguesForTeam(teamId: Int): Flow<List<TeamLeagueMapping>>
 }

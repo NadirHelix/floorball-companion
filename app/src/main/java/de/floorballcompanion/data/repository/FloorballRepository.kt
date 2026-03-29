@@ -1,6 +1,7 @@
 package de.floorballcompanion.data.repository
 
 import de.floorballcompanion.data.local.dao.CacheDao
+import de.floorballcompanion.data.local.dao.ClubDao
 import de.floorballcompanion.data.local.dao.FavoriteDao
 import de.floorballcompanion.data.local.entity.*
 import de.floorballcompanion.data.remote.SaisonmanagerApi
@@ -14,6 +15,7 @@ class FloorballRepository @Inject constructor(
     private val api: SaisonmanagerApi,
     private val favoriteDao: FavoriteDao,
     private val cacheDao: CacheDao,
+    private val clubDao: ClubDao,
 ) {
 
     // ── Remote: Initialisierung ──────────────────────────────
@@ -36,6 +38,49 @@ class FloorballRepository @Inject constructor(
             table.map { it.toCachedEntity(leagueId) }
         )
         return table
+    }
+
+    /** Extended version that also builds club data from table entries */
+    suspend fun refreshTableWithClubDiscovery(
+        leagueId: Int,
+        leagueName: String,
+        gameOperationName: String,
+    ): List<TableEntry> {
+        val table = refreshTable(leagueId)
+        updateClubData(table, leagueId, leagueName, gameOperationName)
+        return table
+    }
+
+    private suspend fun updateClubData(
+        table: List<TableEntry>,
+        leagueId: Int,
+        leagueName: String,
+        gameOperationName: String,
+    ) {
+        val teamsWithLogo = table.filter { !it.teamLogo.isNullOrBlank() }
+        if (teamsWithLogo.isEmpty()) return
+
+        val clubs = teamsWithLogo
+            .groupBy { normalizeLogoUrl(it.teamLogo!!) }
+            .map { (logoUrl, entries) ->
+                ClubEntity(
+                    logoUrl = logoUrl,
+                    name = extractClubName(entries.first().teamName),
+                )
+            }
+        clubDao.insertClubs(clubs)
+
+        val clubTeams = teamsWithLogo.map {
+            ClubTeamEntity(
+                clubLogoUrl = normalizeLogoUrl(it.teamLogo!!),
+                teamId = it.teamId,
+                teamName = it.teamName,
+                leagueId = leagueId,
+                leagueName = leagueName,
+                gameOperationName = gameOperationName,
+            )
+        }
+        clubDao.insertClubTeams(clubTeams)
     }
 
     fun observeCachedTable(leagueId: Int): Flow<List<CachedTableEntry>> =
@@ -102,6 +147,31 @@ class FloorballRepository @Inject constructor(
 
     fun observeGamesForFavoriteTeams(teamIds: List<Int>): Flow<List<CachedGameEntity>> =
         cacheDao.observeGamesForTeams(teamIds)
+
+    // ── Team-League Mappings ───────────────────────────────
+
+    suspend fun getLeaguesForTeam(teamId: Int): List<TeamLeagueMapping> =
+        cacheDao.getLeaguesForTeam(teamId)
+
+    fun observeLeaguesForTeam(teamId: Int): Flow<List<TeamLeagueMapping>> =
+        cacheDao.observeLeaguesForTeam(teamId)
+
+    suspend fun saveTeamLeagueMappings(mappings: List<TeamLeagueMapping>) =
+        cacheDao.insertTeamLeagueMappings(mappings)
+
+    // ── Vereine (Clubs) ────────────────────────────────────
+
+    fun observeAllClubs(): Flow<List<ClubEntity>> =
+        clubDao.observeAllClubs()
+
+    fun observeTeamsForClub(logoUrl: String): Flow<List<ClubTeamEntity>> =
+        clubDao.observeTeamsForClub(logoUrl)
+
+    suspend fun getTeamsForClub(logoUrl: String): List<ClubTeamEntity> =
+        clubDao.getTeamsForClub(logoUrl)
+
+    suspend fun getClubCount(): Int =
+        clubDao.getClubCount()
 }
 
 // ── Mapping-Extensions ───────────────────────────────────────
@@ -123,6 +193,20 @@ private fun TableEntry.toCachedEntity(leagueId: Int) = CachedTableEntry(
     goalsDiff = goalsDiff,
     points = points,
 )
+
+/** Normalize logo URLs by stripping query parameters */
+private fun normalizeLogoUrl(url: String): String {
+    val idx = url.indexOf('?')
+    return if (idx > 0) url.substring(0, idx) else url
+}
+
+/** Extract a club name from a team name (remove common suffixes like "I", "II", age groups) */
+private fun extractClubName(teamName: String): String {
+    return teamName
+        .replace(Regex("\\s+(I{1,3}|IV|V)$"), "") // Roman numeral suffixes
+        .replace(Regex("\\s+[0-9]+$"), "")          // Numeric suffixes
+        .trim()
+}
 
 private fun ScheduledGame.toCachedEntity(leagueId: Int) = CachedGameEntity(
     gameId = resolvedGameId,

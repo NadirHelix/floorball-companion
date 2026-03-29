@@ -1,5 +1,6 @@
 package de.floorballcompanion.ui.favorites
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -16,6 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import de.floorballcompanion.ui.components.TeamLogo
+import de.floorballcompanion.ui.team.TeamFavoriteColor
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -58,7 +61,11 @@ class FavoritesViewModel @Inject constructor(
 // ── Screen ───────────────────────────────────────────────────
 
 @Composable
-fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
+fun FavoritesScreen(
+    onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
+    onLeagueClick: (leagueId: Int) -> Unit = {},
+    viewModel: FavoritesViewModel = hiltViewModel(),
+) {
     val favorites by viewModel.favorites.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -103,8 +110,31 @@ fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // Teams BEFORE leagues (higher priority)
+                grouped["team"]?.let { teams ->
+                    item {
+                        SectionHeader(
+                            icon = Icons.Default.Groups,
+                            title = "Teams (${teams.size})",
+                            tint = TeamFavoriteColor,
+                        )
+                    }
+                    itemsIndexed(teams, key = { _, fav -> "team_${fav.externalId}" }) { index, fav ->
+                        FavoriteCard(
+                            favorite = fav,
+                            onClick = { onTeamClick(fav.externalId, fav.leagueId ?: 0) },
+                            onRemove = { viewModel.removeFavorite(fav) },
+                            canMoveUp = index > 0,
+                            canMoveDown = index < teams.size - 1,
+                            onMoveUp = { viewModel.moveFavorite("team", teams, index, index - 1) },
+                            onMoveDown = { viewModel.moveFavorite("team", teams, index, index + 1) },
+                        )
+                    }
+                }
+
                 grouped["league"]?.let { leagues ->
                     item {
+                        if (grouped.containsKey("team")) Spacer(Modifier.height(8.dp))
                         SectionHeader(
                             icon = Icons.Default.EmojiEvents,
                             title = "Ligen (${leagues.size})",
@@ -113,31 +143,12 @@ fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
                     itemsIndexed(leagues, key = { _, fav -> "league_${fav.externalId}" }) { index, fav ->
                         FavoriteCard(
                             favorite = fav,
+                            onClick = { onLeagueClick(fav.externalId) },
                             onRemove = { viewModel.removeFavorite(fav) },
                             canMoveUp = index > 0,
                             canMoveDown = index < leagues.size - 1,
                             onMoveUp = { viewModel.moveFavorite("league", leagues, index, index - 1) },
                             onMoveDown = { viewModel.moveFavorite("league", leagues, index, index + 1) },
-                        )
-                    }
-                }
-
-                grouped["team"]?.let { teams ->
-                    item {
-                        Spacer(Modifier.height(8.dp))
-                        SectionHeader(
-                            icon = Icons.Default.Groups,
-                            title = "Teams (${teams.size})",
-                        )
-                    }
-                    itemsIndexed(teams, key = { _, fav -> "team_${fav.externalId}" }) { index, fav ->
-                        FavoriteCard(
-                            favorite = fav,
-                            onRemove = { viewModel.removeFavorite(fav) },
-                            canMoveUp = index > 0,
-                            canMoveDown = index < teams.size - 1,
-                            onMoveUp = { viewModel.moveFavorite("team", teams, index, index - 1) },
-                            onMoveDown = { viewModel.moveFavorite("team", teams, index, index + 1) },
                         )
                     }
                 }
@@ -152,6 +163,7 @@ fun FavoritesScreen(viewModel: FavoritesViewModel = hiltViewModel()) {
 private fun SectionHeader(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
+    tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -161,14 +173,14 @@ private fun SectionHeader(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.primary,
+            tint = tint,
         )
         Spacer(Modifier.width(8.dp))
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
+            color = tint,
         )
     }
 }
@@ -178,6 +190,7 @@ private fun SectionHeader(
 @Composable
 private fun FavoriteCard(
     favorite: FavoriteEntity,
+    onClick: () -> Unit = {},
     onRemove: () -> Unit,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
@@ -187,7 +200,9 @@ private fun FavoriteCard(
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
     ) {
         Row(
             modifier = Modifier
@@ -195,6 +210,11 @@ private fun FavoriteCard(
                 .padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Logo for teams
+            if (favorite.type == "team") {
+                TeamLogo(favorite.logoUrl, favorite.name, size = 32.dp)
+                Spacer(Modifier.width(8.dp))
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = favorite.name,

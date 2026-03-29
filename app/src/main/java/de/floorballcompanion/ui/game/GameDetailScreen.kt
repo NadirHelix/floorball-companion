@@ -92,6 +92,7 @@ class GameDetailViewModel @Inject constructor(
 @Composable
 fun GameDetailScreen(
     onBack: () -> Unit,
+    onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
     viewModel: GameDetailViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -152,7 +153,7 @@ fun GameDetailScreen(
                     }
                 }
                 uiState.game != null -> {
-                    GameContent(uiState.game!!)
+                    GameContent(uiState.game!!, onTeamClick)
                 }
             }
         }
@@ -166,7 +167,7 @@ fun GameDetailScreen(
 // ── Main Content ─────────────────────────────────────────────
 
 @Composable
-private fun GameContent(game: GameDetail) {
+private fun GameContent(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _, _ -> }) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = buildList {
         add("Events")
@@ -175,7 +176,7 @@ private fun GameContent(game: GameDetail) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Score-Header
-        ScoreHeader(game)
+        ScoreHeader(game, onTeamClick)
 
         // Tabs
         TabRow(selectedTabIndex = selectedTab) {
@@ -199,7 +200,7 @@ private fun GameContent(game: GameDetail) {
 // ── Score-Header ─────────────────────────────────────────────
 
 @Composable
-private fun ScoreHeader(game: GameDetail) {
+private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _, _ -> }) {
     val isLive = game.gameStatus.lowercase() in listOf("live", "1", "2", "3")
 
     Surface(
@@ -253,7 +254,13 @@ private fun ScoreHeader(game: GameDetail) {
             ) {
                 // Home
                 Column(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            if (game.homeTeamId != 0 && game.leagueId != null)
+                                Modifier.clickable { onTeamClick(game.homeTeamId, game.leagueId) }
+                            else Modifier
+                        ),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     TeamLogo(game.homeTeamLogo, game.homeTeamName, size = 48.dp)
@@ -314,7 +321,13 @@ private fun ScoreHeader(game: GameDetail) {
 
                 // Guest
                 Column(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            if (game.guestTeamId != 0 && game.leagueId != null)
+                                Modifier.clickable { onTeamClick(game.guestTeamId, game.leagueId) }
+                            else Modifier
+                        ),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     TeamLogo(game.guestTeamLogo, game.guestTeamName, size = 48.dp)
