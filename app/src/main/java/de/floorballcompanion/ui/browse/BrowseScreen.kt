@@ -62,6 +62,14 @@ class BrowseViewModel @Inject constructor(
     private val _teamFavoriteCountBySlug = MutableStateFlow<Map<String, Int>>(emptyMap())
     val teamFavoriteCountBySlug = _teamFavoriteCountBySlug.asStateFlow()
 
+    // Ausgewählter Feldgrößen-Tab (GF=0 / KF=1) pro Verbands-ID — persistiert Navigation
+    private val _selectedFieldTabs = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    val selectedFieldTabs = _selectedFieldTabs.asStateFlow()
+
+    fun selectFieldTab(operationId: Int, tab: Int) {
+        _selectedFieldTabs.update { it + (operationId to tab) }
+    }
+
     init {
         loadOperations()
         observeFavorites()
@@ -180,6 +188,7 @@ fun BrowseScreen(
     val favoriteIds by viewModel.favoriteLeagueIds.collectAsState()
     val favCountBySlug by viewModel.favoriteCountBySlug.collectAsState()
     val teamFavCountBySlug by viewModel.teamFavoriteCountBySlug.collectAsState()
+    val selectedFieldTabs by viewModel.selectedFieldTabs.collectAsState()
 
     when {
         uiState.isLoading -> {
@@ -197,8 +206,9 @@ fun BrowseScreen(
             }
         }
         else -> {
-            // Verbände mit Favoriten nach oben sortieren
-            val sortedOperations = remember(uiState.gameOperations, favCountBySlug, teamFavCountBySlug) {
+            // Verbände mit Favoriten nach oben sortieren — nur beim initialen Laden,
+            // nicht bei jeder Favoriten-Änderung (damit die Position erhalten bleibt)
+            val sortedOperations = remember(uiState.gameOperations) {
                 uiState.gameOperations.sortedByDescending { op ->
                     ((favCountBySlug[op.path] ?: 0) + (teamFavCountBySlug[op.path] ?: 0)) > 0
                 }
@@ -233,8 +243,10 @@ fun BrowseScreen(
                         favoriteIds = favoriteIds,
                         favoriteCount = favCountBySlug[operation.path] ?: 0,
                         teamFavoriteCount = teamFavCountBySlug[operation.path] ?: 0,
+                        selectedFieldTab = selectedFieldTabs[operation.id] ?: 0,
                         onToggleExpand = { viewModel.loadLeaguesForOperation(operation) },
                         onToggleFavorite = { viewModel.toggleLeagueFavorite(it) },
+                        onSelectFieldTab = { tab -> viewModel.selectFieldTab(operation.id, tab) },
                         onLeagueClick = onLeagueClick,
                     )
                 }
@@ -254,8 +266,10 @@ private fun OperationCard(
     favoriteIds: Set<Int>,
     favoriteCount: Int,
     teamFavoriteCount: Int = 0,
+    selectedFieldTab: Int = 0,
     onToggleExpand: () -> Unit,
     onToggleFavorite: (LeaguePreview) -> Unit,
+    onSelectFieldTab: (Int) -> Unit = {},
     onLeagueClick: (Int) -> Unit,
 ) {
     Card(
@@ -365,7 +379,6 @@ private fun OperationCard(
                         }
 
                     if (gfGroups.isNotEmpty() && kfGroups.isNotEmpty()) {
-                        var selectedFieldTab by remember { mutableIntStateOf(0) }
                         val gfCount = gfGroups.sumOf { it.allLeagues.size }
                         val kfCount = kfGroups.sumOf { it.allLeagues.size }
                         val tabs = listOf("Großfeld ($gfCount)", "Kleinfeld ($kfCount)")
@@ -377,7 +390,7 @@ private fun OperationCard(
                             tabs.forEachIndexed { index, title ->
                                 Tab(
                                     selected = selectedFieldTab == index,
-                                    onClick = { selectedFieldTab = index },
+                                    onClick = { onSelectFieldTab(index) },
                                     text = { Text(title, style = MaterialTheme.typography.labelMedium) },
                                 )
                             }

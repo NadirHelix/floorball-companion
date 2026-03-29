@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import de.floorballcompanion.LocalOriginTabIcon
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
@@ -160,6 +161,9 @@ class LeagueDetailViewModel @Inject constructor(
                 val currentPhaseTab = _uiState.value.phaseTabs.getOrNull(_uiState.value.selectedPhaseIndex)
                 if (currentPhaseTab != null) {
                     loadPhaseData(currentPhaseTab)
+                } else if (detail.leagueModus == "cup") {
+                    // Cup-Wettbewerbe haben keine Tabelle, Anzeige als Pokal-Runden
+                    loadPlayoffData(leagueId)
                 } else {
                     // Keine Phasen gefunden: normal laden
                     loadRegularData(leagueId, detail.gameDayTitles)
@@ -226,7 +230,9 @@ class LeagueDetailViewModel @Inject constructor(
 
     private suspend fun loadRegularData(leagueId: Int, gameDayTitlesFromDetail: List<GameDayTitle>? = null) {
         val scheduleDeferred = viewModelScope.async { repository.getSchedule(leagueId) }
-        val tableDeferred = viewModelScope.async { repository.refreshTable(leagueId) }
+        val tableDeferred = viewModelScope.async {
+            try { repository.refreshTable(leagueId) } catch (_: Exception) { emptyList() }
+        }
         val scorerDeferred = viewModelScope.async { repository.getScorer(leagueId) }
 
         val schedule = scheduleDeferred.await()
@@ -294,7 +300,8 @@ class LeagueDetailViewModel @Inject constructor(
                 )
             }
         } else {
-            val rounds = playoffService.buildRounds(schedule)
+            val isCup = modus == "cup"
+            val rounds = if (isCup) playoffService.buildCupRounds(schedule) else playoffService.buildRounds(schedule)
             _uiState.update {
                 it.copy(
                     isChampionshipFormat = false,
@@ -450,37 +457,48 @@ private fun isTeamTbd(game: ScheduledGame, isHome: Boolean): Boolean {
 @Composable
 fun LeagueDetailScreen(
     onBack: () -> Unit,
+    onNavigateToRoot: (() -> Unit)? = null,
     onGameClick: (gameId: Int) -> Unit = {},
+    onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
     viewModel: LeagueDetailViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val isFavorite by viewModel.isFavorite.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurueck")
-            }
-            Text(
-                text = uiState.leagueName.ifEmpty { "Liga Details" },
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = { viewModel.toggleFavorite() }) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                    contentDescription = if (isFavorite) "Favorit entfernen" else "Als Favorit markieren",
-                    tint = if (isFavorite) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+        // Header with status bar coloring
+        Surface(color = MaterialTheme.colorScheme.primaryContainer) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurueck")
+                }
+                Text(
+                    text = uiState.leagueName.ifEmpty { "Liga Details" },
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
+                if (onNavigateToRoot != null) {
+                    IconButton(onClick = onNavigateToRoot) {
+                        Icon(LocalOriginTabIcon.current, contentDescription = "Zur Hauptseite")
+                    }
+                }
+                IconButton(onClick = { viewModel.toggleFavorite() }) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                        contentDescription = if (isFavorite) "Favorit entfernen" else "Als Favorit markieren",
+                        tint = if (isFavorite) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -712,10 +730,17 @@ private fun PlayoffRoundTab(
 
 // -- Series Card (aufklappbar) ------------------------------------------------
 
+/** Vergleicht ob ein TeamInfo dem Gewinner entspricht — nutzt Namen als Fallback wenn id=0 */
+private fun isSeriesWinner(winner: de.floorballcompanion.domain.model.TeamInfo?, team: de.floorballcompanion.domain.model.TeamInfo): Boolean {
+    if (winner == null) return false
+    return if (winner.id != 0 && team.id != 0) winner.id == team.id else winner.name == team.name
+}
+
 @Composable
 private fun SeriesCard(series: PlayoffSeries, onGameClick: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val isDecided = series.isCompleted
+    val winner = series.winner
 
     Card(
         modifier = Modifier
@@ -758,9 +783,9 @@ private fun SeriesCard(series: PlayoffSeries, onGameClick: (Int) -> Unit) {
                     Text(
                         text = series.higherSeed.name,
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (series.winner?.id == series.higherSeed.id)
+                        fontWeight = if (isSeriesWinner(winner, series.higherSeed))
                             FontWeight.ExtraBold else FontWeight.Medium,
-                        color = if (series.winner?.id == series.higherSeed.id)
+                        color = if (isSeriesWinner(winner, series.higherSeed))
                             MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         maxLines = 2,
                     )
@@ -811,9 +836,9 @@ private fun SeriesCard(series: PlayoffSeries, onGameClick: (Int) -> Unit) {
                     Text(
                         text = series.lowerSeed.name,
                         style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (series.winner?.id == series.lowerSeed.id)
+                        fontWeight = if (isSeriesWinner(winner, series.lowerSeed))
                             FontWeight.ExtraBold else FontWeight.Medium,
-                        color = if (series.winner?.id == series.lowerSeed.id)
+                        color = if (isSeriesWinner(winner, series.lowerSeed))
                             MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         maxLines = 2,
                         textAlign = TextAlign.End,
@@ -1218,9 +1243,10 @@ private fun TableTab(table: List<TableEntry>) {
                 TableHeader("Team", 130.dp, TextAlign.Start)
                 TableHeader("Sp", 30.dp)
                 TableHeader("S", 26.dp)
-                TableHeader("SO", 28.dp)
-                TableHeader("NO", 28.dp)
+                TableHeader("U", 26.dp)
                 TableHeader("N", 26.dp)
+                TableHeader("SDS", 32.dp)
+                TableHeader("SDN", 32.dp)
                 TableHeader("Tore", 60.dp)
                 TableHeader("Diff", 40.dp)
             }
@@ -1260,9 +1286,10 @@ private fun TableTab(table: List<TableEntry>) {
                     TableCell(entry.teamName, 130.dp, textAlign = TextAlign.Start, fontWeight = FontWeight.Medium, maxLines = 1)
                     TableCell("${entry.games}", 30.dp)
                     TableCell("${entry.won}", 26.dp)
-                    TableCell("${entry.wonOt}", 28.dp)
-                    TableCell("${entry.lostOt}", 28.dp)
+                    TableCell("${entry.draw}", 26.dp)
                     TableCell("${entry.lost}", 26.dp)
+                    TableCell("${entry.wonOt}", 32.dp)
+                    TableCell("${entry.lostOt}", 32.dp)
                     TableCell("${entry.goalsScored}:${entry.goalsReceived}", 60.dp)
                     TableCell(diffText, 40.dp, color = diffColor, fontWeight = FontWeight.Medium)
                 }

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
+import de.floorballcompanion.LocalOriginTabIcon
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
@@ -50,6 +52,7 @@ data class GameDetailUiState(
     val game: GameDetail? = null,
     val isLoading: Boolean = true,
     val error: String? = null,
+    val isNotAvailable: Boolean = false,
 )
 
 // ── ViewModel ────────────────────────────────────────────────
@@ -71,10 +74,25 @@ class GameDetailViewModel @Inject constructor(
 
     private fun loadGame() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+            _uiState.update { it.copy(isLoading = true, error = null, isNotAvailable = false) }
             try {
                 val game = repository.getGameDetail(gameId)
                 _uiState.update { it.copy(game = game, isLoading = false) }
+            } catch (e: HttpException) {
+                val code = e.code()
+                if (code in listOf(404, 500)) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = "Spieldaten noch nicht verfügbar",
+                            isNotAvailable = true,
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, error = "Fehler beim Laden (HTTP $code)")
+                    }
+                }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, error = e.message ?: "Fehler beim Laden")
@@ -92,6 +110,7 @@ class GameDetailViewModel @Inject constructor(
 @Composable
 fun GameDetailScreen(
     onBack: () -> Unit,
+    onNavigateToRoot: (() -> Unit)? = null,
     onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
     viewModel: GameDetailViewModel = hiltViewModel(),
 ) {
@@ -124,6 +143,11 @@ fun GameDetailScreen(
                     }
                 },
                 actions = {
+                    if (onNavigateToRoot != null) {
+                        IconButton(onClick = onNavigateToRoot) {
+                            Icon(LocalOriginTabIcon.current, contentDescription = "Zur Hauptseite")
+                        }
+                    }
                     if (uiState.game != null) {
                         IconButton(onClick = { showInfoDialog = true }) {
                             Icon(Icons.Default.Info, "Spielinfos")
@@ -147,9 +171,17 @@ fun GameDetailScreen(
                         modifier = Modifier.align(Alignment.Center),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(uiState.error!!, color = MaterialTheme.colorScheme.error)
+                        Text(
+                            uiState.error!!,
+                            color = if (uiState.isNotAvailable) MaterialTheme.colorScheme.onSurfaceVariant
+                                    else MaterialTheme.colorScheme.error,
+                        )
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = { viewModel.retry() }) { Text("Erneut versuchen") }
+                        if (uiState.isNotAvailable) {
+                            OutlinedButton(onClick = onBack) { Text("Zurück") }
+                        } else {
+                            Button(onClick = { viewModel.retry() }) { Text("Erneut versuchen") }
+                        }
                     }
                 }
                 uiState.game != null -> {
@@ -574,7 +606,9 @@ private fun EventRow(
             }.ifEmpty { null }
         }
         "penalty" -> {
-            icon = "\uD83D\uDFE8"  // 🟨
+            val isMspenalty = event.penaltyType?.lowercase()?.startsWith("ms") == true ||
+                event.penaltyTypeString?.lowercase()?.let { it.startsWith("ms") || it == "matchstrafe" } == true
+            icon = if (isMspenalty) "\uD83D\uDFE5" else "\uD83D\uDFE8"  // 🟥 or 🟨
             primaryColor = MaterialTheme.colorScheme.error
             val playerName = event.number?.let { playerLookup[it] } ?: ""
             val playerNum = event.number?.let { "#$it" } ?: ""
@@ -779,6 +813,8 @@ private fun RosterTab(game: GameDetail) {
                 }
                 if (startingSixExpanded) {
                     val sorted = startingSix.sortedBy { positionOrder(it.position) }
+                    // Kapitän-Status aus dem vollständigen Kader (StartingPlayer hat kein captain-Feld)
+                    val captainIds = roster.filter { it.captain }.map { it.playerId }.toSet()
                     itemsIndexed(sorted, key = { index, _ -> "start-$selectedTeam-$index" }) { _, player ->
                         Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)) {
                             PlayerRow(
@@ -786,7 +822,7 @@ private fun RosterTab(game: GameDetail) {
                                 name = "${player.playerFirstname} ${player.playerName}",
                                 positionLabel = startingPositionLabel(player.position),
                                 isGoalkeeper = player.position == "goal",
-                                isCaptain = false,
+                                isCaptain = player.playerId != 0 && player.playerId in captainIds,
                             )
                         }
                     }

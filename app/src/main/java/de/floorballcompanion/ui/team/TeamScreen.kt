@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package de.floorballcompanion.ui.team
 
 import androidx.compose.animation.AnimatedVisibility
@@ -11,6 +13,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Star
+import de.floorballcompanion.LocalOriginTabIcon
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -78,6 +84,7 @@ data class TeamDetailUiState(
     val isSearchingMoreLeagues: Boolean = false,
     val searchProgress: String? = null,
     val hasSearchedMoreLeagues: Boolean = false,
+    val searchError: String? = null,
 
     // Aggregated scorer tab
     val selectedScorerTab: Int = 0, // 0 = primary league, 1+ = additional leagues or "all"
@@ -163,7 +170,9 @@ class TeamDetailViewModel @Inject constructor(
             try {
                 val detailDeferred = async { repository.getLeagueDetail(leagueId) }
                 val scheduleDeferred = async { repository.getSchedule(leagueId) }
-                val tableDeferred = async { repository.refreshTable(leagueId) }
+                val tableDeferred = async {
+                    try { repository.refreshTable(leagueId) } catch (_: Exception) { emptyList() }
+                }
                 val scorerDeferred = async { repository.getScorer(leagueId) }
 
                 val detail = detailDeferred.await()
@@ -252,7 +261,7 @@ class TeamDetailViewModel @Inject constructor(
     fun searchMoreLeagues() {
         if (_uiState.value.isSearchingMoreLeagues) return
         viewModelScope.launch {
-            _uiState.update { it.copy(isSearchingMoreLeagues = true, searchProgress = "Lade alle Ligen...") }
+            _uiState.update { it.copy(isSearchingMoreLeagues = true, searchProgress = "Lade alle Ligen...", searchError = null) }
             try {
                 val results = aggregationService.discoverLeaguesForTeam(
                     teamId = teamId,
@@ -273,8 +282,9 @@ class TeamDetailViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isSearchingMoreLeagues = false,
-                        hasSearchedMoreLeagues = true,
+                        hasSearchedMoreLeagues = false,
                         searchProgress = null,
+                        searchError = "Suche fehlgeschlagen. Bitte erneut versuchen.",
                     )
                 }
             }
@@ -333,6 +343,7 @@ private fun formatDate(dateStr: String): String =
 @Composable
 fun TeamScreen(
     onBack: () -> Unit,
+    onNavigateToRoot: (() -> Unit)? = null,
     onGameClick: (gameId: Int) -> Unit = {},
     onLeagueClick: (leagueId: Int) -> Unit = {},
     onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
@@ -373,6 +384,11 @@ fun TeamScreen(
                     }
                 },
                 actions = {
+                    if (onNavigateToRoot != null) {
+                        IconButton(onClick = onNavigateToRoot) {
+                            Icon(LocalOriginTabIcon.current, contentDescription = "Zur Hauptseite")
+                        }
+                    }
                     IconButton(onClick = { viewModel.toggleFavorite() }) {
                         Icon(
                             imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
@@ -421,6 +437,9 @@ fun TeamScreen(
 
 // ── Main Content ─────────────────────────────────────────────
 
+private enum class TeamScorerMode { SCORER, STRAFEN }
+private enum class TeamStrafenSort { MS, MS_T, P10, P2_2, P2 }
+
 @Composable
 private fun TeamContent(
     uiState: TeamDetailUiState,
@@ -434,6 +453,9 @@ private fun TeamContent(
     val hasAdditional = uiState.additionalLeagues.isNotEmpty()
     val allUpcoming = if (hasAdditional) uiState.allUpcomingGames else uiState.upcomingGames.map { uiState.leagueName to it }
     val allPast = if (hasAdditional) uiState.allPastGames else uiState.pastGames.map { uiState.leagueName to it }
+
+    var scorerMode by remember { mutableStateOf(TeamScorerMode.SCORER) }
+    var strafenSort by remember { mutableStateOf(TeamStrafenSort.MS) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -485,9 +507,31 @@ private fun TeamContent(
                     teamId = uiState.teamId,
                     teamPosition = uiState.teamPosition,
                     leagueId = uiState.leagueId,
+                    leagueName = uiState.leagueName,
                     onLeagueClick = onLeagueClick,
                     onTeamClick = onTeamClick,
                 )
+            }
+        }
+
+        // Tabellen aus weiteren Wettbewerben
+        if (hasAdditional) {
+            uiState.additionalLeagues.forEachIndexed { idx, league ->
+                val leagueTable = league.table
+                val leaguePosition = leagueTable.find { it.teamId == uiState.teamId }?.position
+                if (leagueTable.isNotEmpty() && leaguePosition != null) {
+                    item(key = "mini-table-extra-$idx") {
+                        MiniTableCard(
+                            table = leagueTable,
+                            teamId = uiState.teamId,
+                            teamPosition = leaguePosition,
+                            leagueId = league.leagueId,
+                            leagueName = league.leagueName,
+                            onLeagueClick = onLeagueClick,
+                            onTeamClick = onTeamClick,
+                        )
+                    }
+                }
             }
         }
 
@@ -526,15 +570,51 @@ private fun TeamContent(
             }
         }
 
-        // Cross-league results summary
+        // Search error
+        if (uiState.searchError != null) {
+            item(key = "search-error") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        uiState.searchError,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+
+        // Cross-league results summary — anklickbare Liga-Chips
         if (hasAdditional) {
             item(key = "cross-league-info") {
-                Text(
-                    "Weitere Wettbewerbe: ${uiState.additionalLeagues.joinToString { it.leagueName }}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    Text(
+                        "Weitere Wettbewerbe:",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        uiState.additionalLeagues.forEach { league ->
+                            androidx.compose.material3.AssistChip(
+                                onClick = { onLeagueClick(league.leagueId) },
+                                label = {
+                                    Text(
+                                        league.leagueName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
             }
         } else if (uiState.hasSearchedMoreLeagues && !uiState.isSearchingMoreLeagues) {
             item(key = "no-more-leagues") {
@@ -547,34 +627,56 @@ private fun TeamContent(
             }
         }
 
-        // Scorer section with tabs (if cross-league data available)
-        val scorerData = if (hasAdditional) {
+        // Scorer section with tabs (all leagues, even those without scorer data)
+        // Data: Pair<leagueName, scorers or null (= no scorer data available)>
+        val scorerData: List<Pair<String, List<ScorerEntry>?>> = if (hasAdditional) {
             buildList {
                 add("Alle" to uiState.aggregatedScorers)
                 add(uiState.leagueName to uiState.scorers)
                 uiState.additionalLeagues.forEach { league ->
-                    if (league.scorers.isNotEmpty()) {
-                        add(league.leagueName to league.scorers)
-                    }
+                    // null = scorers not available (league found, but no data)
+                    add(league.leagueName to league.scorers.ifEmpty { null })
                 }
             }
         } else {
-            listOf(uiState.leagueName to uiState.scorers)
+            listOf(uiState.leagueName to uiState.scorers.ifEmpty { null })
         }
 
-        val activeScorers = scorerData.getOrNull(uiState.selectedScorerTab)?.second ?: uiState.scorers
+        val hasAnyScorers = scorerData.any { it.second?.isNotEmpty() == true }
+        val activeScorers = scorerData.getOrNull(uiState.selectedScorerTab)?.second
 
-        if (scorerData.any { it.second.isNotEmpty() }) {
+        if (hasAnyScorers || hasAdditional) {
             item(key = "scorer-header") {
-                Text(
-                    "Scorer",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Scorer",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // Modus-Toggle
+                    TeamScorerMode.entries.forEach { m ->
+                        FilterChip(
+                            selected = scorerMode == m,
+                            onClick = { scorerMode = m },
+                            label = {
+                                Text(
+                                    if (m == TeamScorerMode.SCORER) "Punkte" else "Strafen",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            },
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
             }
 
-            // Scorer tabs (only if multiple)
+            // Scorer tabs (only if multiple leagues)
             if (scorerData.size > 1) {
                 item(key = "scorer-tabs") {
                     ScrollableTabRow(
@@ -592,13 +694,55 @@ private fun TeamContent(
                 }
             }
 
-            // Scorer header row
-            item(key = "scorer-col-header") {
-                ScorerHeaderRow()
-            }
-
-            items(activeScorers.take(20), key = { "scorer-${uiState.selectedScorerTab}-${it.playerId}" }) { scorer ->
-                ScorerRow(scorer)
+            if (activeScorers == null) {
+                // Liga gefunden, aber keine Scorerdaten verfügbar
+                item(key = "scorer-empty") {
+                    Text(
+                        "Keine Scorerdaten für diesen Wettbewerb verfügbar",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            } else if (activeScorers.isEmpty()) {
+                item(key = "scorer-empty") {
+                    Text(
+                        "Keine Scorerdaten vorhanden",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            } else {
+                val displayScorers = if (scorerMode == TeamScorerMode.STRAFEN) {
+                    val comparator = when (strafenSort) {
+                        TeamStrafenSort.MS -> compareByDescending<ScorerEntry> { it.penaltyMsFull }
+                            .thenByDescending { it.penaltyMsTech }.thenByDescending { it.penalty10 }
+                        TeamStrafenSort.MS_T -> compareByDescending<ScorerEntry> { it.penaltyMsTech }
+                            .thenByDescending { it.penaltyMsFull }.thenByDescending { it.penalty10 }
+                        TeamStrafenSort.P10 -> compareByDescending<ScorerEntry> { it.penalty10 }
+                            .thenByDescending { it.penaltyMsFull }.thenByDescending { it.penaltyMsTech }
+                        TeamStrafenSort.P2_2 -> compareByDescending<ScorerEntry> { it.penalty2and2 }
+                            .thenByDescending { it.penalty10 }.thenByDescending { it.penaltyMsFull }
+                        TeamStrafenSort.P2 -> compareByDescending<ScorerEntry> { it.penalty2 }
+                            .thenByDescending { it.penalty2and2 }.thenByDescending { it.penalty10 }
+                    }
+                    activeScorers.filter {
+                        it.penalty2 + it.penalty2and2 + it.penalty10 + it.penaltyMsTech + it.penaltyMsFull > 0
+                    }.sortedWith(comparator)
+                } else {
+                    activeScorers.take(20)
+                }
+                item(key = "scorer-col-header") {
+                    ScorerHeaderRow(
+                        showPenalties = scorerMode == TeamScorerMode.STRAFEN,
+                        strafenSort = strafenSort,
+                        onStrafenSortChange = { strafenSort = it },
+                    )
+                }
+                items(displayScorers, key = { "scorer-${uiState.selectedScorerTab}-${scorerMode}-${it.playerId}" }) { scorer ->
+                    ScorerRow(scorer, showPenalties = scorerMode == TeamScorerMode.STRAFEN)
+                }
             }
         }
     }
@@ -773,6 +917,7 @@ private fun MiniTableCard(
     teamId: Int,
     teamPosition: Int,
     leagueId: Int,
+    leagueName: String = "",
     onLeagueClick: (Int) -> Unit,
     onTeamClick: (Int, Int) -> Unit,
 ) {
@@ -794,13 +939,21 @@ private fun MiniTableCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "Tabelle",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Tabelle",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (leagueName.isNotEmpty()) {
+                        Text(
+                            leagueName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                 Text(
                     "Zur Liga →",
                     style = MaterialTheme.typography.labelSmall,
@@ -998,28 +1151,65 @@ private fun MiniTableRow(
 // ── Scorer Header Row ────────────────────────────────────────
 
 @Composable
-private fun ScorerHeaderRow() {
+private fun ScorerHeaderRow(
+    showPenalties: Boolean = false,
+    strafenSort: TeamStrafenSort = TeamStrafenSort.MS,
+    onStrafenSortChange: (TeamStrafenSort) -> Unit = {},
+) {
+    val headerStyle = MaterialTheme.typography.labelSmall
+    val headerColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val activeColor = MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("#", Modifier.width(28.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Spieler", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Sp", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("T", Modifier.width(28.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("V", Modifier.width(28.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Pkt", Modifier.width(34.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(32.dp)) // penalty column space
+        Text("#", Modifier.width(28.dp), style = headerStyle, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = headerColor)
+        Text("Spieler", Modifier.weight(1f), style = headerStyle, fontWeight = FontWeight.Bold, color = headerColor)
+        if (showPenalties) {
+            SortableHeader("2'", 28.dp, strafenSort == TeamStrafenSort.P2, activeColor, headerColor, headerStyle) { onStrafenSortChange(TeamStrafenSort.P2) }
+            SortableHeader("2+2", 32.dp, strafenSort == TeamStrafenSort.P2_2, activeColor, headerColor, headerStyle) { onStrafenSortChange(TeamStrafenSort.P2_2) }
+            SortableHeader("10'", 30.dp, strafenSort == TeamStrafenSort.P10, activeColor, headerColor, headerStyle) { onStrafenSortChange(TeamStrafenSort.P10) }
+            SortableHeader("MS-T", 36.dp, strafenSort == TeamStrafenSort.MS_T, activeColor, headerColor, headerStyle) { onStrafenSortChange(TeamStrafenSort.MS_T) }
+            SortableHeader("MS", 28.dp, strafenSort == TeamStrafenSort.MS, activeColor, headerColor, headerStyle) { onStrafenSortChange(TeamStrafenSort.MS) }
+        } else {
+            Text("Sp", Modifier.width(30.dp), style = headerStyle, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = headerColor)
+            Text("T", Modifier.width(28.dp), style = headerStyle, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = headerColor)
+            Text("V", Modifier.width(28.dp), style = headerStyle, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = headerColor)
+            Text("Pkt", Modifier.width(34.dp), style = headerStyle, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = headerColor)
+        }
     }
     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+}
+
+@Composable
+private fun SortableHeader(
+    text: String,
+    width: Dp,
+    isActive: Boolean,
+    activeColor: androidx.compose.ui.graphics.Color,
+    inactiveColor: androidx.compose.ui.graphics.Color,
+    style: androidx.compose.ui.text.TextStyle,
+    onClick: () -> Unit,
+) {
+    Text(
+        text,
+        modifier = Modifier
+            .width(width)
+            .clickable(onClick = onClick),
+        style = style,
+        fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        color = if (isActive) activeColor else inactiveColor,
+        textDecoration = if (isActive) TextDecoration.Underline else TextDecoration.None,
+    )
 }
 
 // ── Scorer Row ───────────────────────────────────────────────
 
 @Composable
-private fun ScorerRow(scorer: ScorerEntry) {
+private fun ScorerRow(scorer: ScorerEntry, showPenalties: Boolean = false) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1040,47 +1230,47 @@ private fun ScorerRow(scorer: ScorerEntry) {
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
             )
-        }
-        Text(
-            "${scorer.games}",
-            modifier = Modifier.width(30.dp),
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            "${scorer.goals}",
-            modifier = Modifier.width(28.dp),
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            "${scorer.assists}",
-            modifier = Modifier.width(28.dp),
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            "${scorer.goals + scorer.assists}",
-            modifier = Modifier.width(34.dp),
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-            fontWeight = FontWeight.Bold,
-        )
-        // Penalties summary
-        val totalPenalties = scorer.penalty2 + scorer.penalty2and2 + scorer.penalty10 +
-            scorer.penaltyMsTech + scorer.penaltyMsFull
-        if (totalPenalties > 0) {
             Text(
-                "${totalPenalties}x",
-                modifier = Modifier.width(32.dp),
+                scorer.teamName,
                 style = MaterialTheme.typography.labelSmall,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.error,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
+        }
+        if (showPenalties) {
+            Text("${scorer.penalty2}", Modifier.width(28.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+            Text("${scorer.penalty2and2}", Modifier.width(32.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+            Text("${scorer.penalty10}", Modifier.width(30.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+            Text("${scorer.penaltyMsTech}", Modifier.width(36.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.error)
+            Text("${scorer.penaltyMsFull}", Modifier.width(28.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
         } else {
-            Spacer(Modifier.width(32.dp))
+            Text(
+                "${scorer.games}",
+                modifier = Modifier.width(30.dp),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                "${scorer.goals}",
+                modifier = Modifier.width(28.dp),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "${scorer.assists}",
+                modifier = Modifier.width(28.dp),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                "${scorer.goals + scorer.assists}",
+                modifier = Modifier.width(34.dp),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }

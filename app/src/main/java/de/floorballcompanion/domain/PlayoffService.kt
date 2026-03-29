@@ -17,8 +17,13 @@ class PlayoffService @Inject constructor() {
      * @param gameDayTitles optionale Spieltag-Titel aus LeagueDetail (gameDayNumber → Titel)
      */
     fun buildRounds(games: List<ScheduledGame>, gameDayTitles: Map<Int, String> = emptyMap()): List<PlayoffRound> {
-        // Spiele ohne Spielnummer ausfiltern (Platzhalter)
-        val validGames = games.filter { (it.gameNumber ?: 0) > 0 }
+        // Platzhalter-Spiele ausfiltern: nur Spiele ohne Spielnummer UND ohne bekannte Teams entfernen
+        // Spiele mit gameNumber=0/null aber echten Team-IDs sind geplante (noch nicht gespielte) Spiele
+        val validGames = games.filter { game ->
+            (game.gameNumber ?: 0) > 0 ||
+                (game.homeTeamId != 0 && game.guestTeamId != 0) ||
+                (game.homeTeamName.isNotEmpty() && game.guestTeamName.isNotEmpty())
+        }
         if (validGames.isEmpty()) return emptyList()
 
         // Wenn series_title vorhanden: direkt nach Titel gruppieren
@@ -214,7 +219,11 @@ class PlayoffService @Inject constructor() {
      * >8 Serien → "X. Runde", 8 → "Achtelfinale", 4 → "Viertelfinale", 2 → "Final 4", 1 → "Finale"
      */
     fun buildCupRounds(games: List<ScheduledGame>): List<PlayoffRound> {
-        val validGames = games.filter { (it.gameNumber ?: 0) > 0 }
+        val validGames = games.filter { game ->
+            (game.gameNumber ?: 0) > 0 ||
+                (game.homeTeamId != 0 && game.guestTeamId != 0) ||
+                (game.homeTeamName.isNotEmpty() && game.guestTeamName.isNotEmpty())
+        }
         if (validGames.isEmpty()) return emptyList()
 
         val gameDays = validGames.mapNotNull { it.gameDayNumber }.distinct().sorted()

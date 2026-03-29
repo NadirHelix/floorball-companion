@@ -9,9 +9,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -26,7 +29,6 @@ import androidx.navigation.navArgument
 import dagger.hilt.android.AndroidEntryPoint
 import de.floorballcompanion.ui.browse.BrowseScreen
 import de.floorballcompanion.ui.dashboard.DashboardScreen
-import de.floorballcompanion.ui.favorites.FavoritesScreen
 import de.floorballcompanion.ui.game.GameDetailScreen
 import de.floorballcompanion.ui.league.LeagueDetailScreen
 import de.floorballcompanion.ui.club.ClubDetailScreen
@@ -60,10 +62,11 @@ sealed class Screen(val route: String, val label: String) {
     data object Dashboard : Screen("dashboard", "Dashboard")
     data object Browse : Screen("browse", "Ligen")
     data object Clubs : Screen("clubs", "Vereine")
-    data object Favorites : Screen("favorites", "Favoriten")
 }
 
-val bottomNavItems = listOf(Screen.Dashboard, Screen.Browse, Screen.Clubs, Screen.Favorites)
+val bottomNavItems = listOf(Screen.Dashboard, Screen.Browse, Screen.Clubs)
+
+val LocalOriginTabIcon = compositionLocalOf<ImageVector> { Icons.Default.Home }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +74,29 @@ fun MainApp() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+
+    // Findet die letzte Bottom-Nav-Route im Back-Stack (= Ursprungs-Tab des Users)
+    val backStack by navController.currentBackStack.collectAsState()
+    val bottomRoutes = remember { bottomNavItems.map { it.route }.toSet() }
+    val originRoute = remember(backStack) {
+        backStack.mapNotNull { it.destination.route }.lastOrNull { it in bottomRoutes }
+    }
+    val onNavigateToRoot: (() -> Unit)? = if (originRoute != null) {
+        {
+            navController.navigate(originRoute) {
+                popUpTo(originRoute) { inclusive = false }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    } else null
+    val originIcon = remember(originRoute) {
+        when (originRoute) {
+            Screen.Browse.route -> Icons.Default.Search
+            Screen.Clubs.route -> Icons.Default.Groups
+            else -> Icons.Default.Home
+        }
+    }
     val isOnDetailScreen = currentDestination?.route?.let { route ->
         route.startsWith("league_detail/") ||
             route.startsWith("game_detail/") ||
@@ -127,7 +153,6 @@ fun MainApp() {
                                         Screen.Dashboard -> Icons.Default.Home
                                         Screen.Browse -> Icons.Default.Search
                                         Screen.Clubs -> Icons.Default.Groups
-                                        Screen.Favorites -> Icons.Default.Star
                                     },
                                     contentDescription = screen.label,
                                 )
@@ -139,6 +164,7 @@ fun MainApp() {
             }
         },
     ) { innerPadding ->
+        CompositionLocalProvider(LocalOriginTabIcon provides originIcon) {
         NavHost(
             navController = navController,
             startDestination = Screen.Dashboard.route,
@@ -168,22 +194,13 @@ fun MainApp() {
                     },
                 )
             }
-            composable(Screen.Favorites.route) {
-                FavoritesScreen(
-                    onTeamClick = { teamId, leagueId ->
-                        navController.navigate("team_detail/$teamId/$leagueId")
-                    },
-                    onLeagueClick = { leagueId ->
-                        navController.navigate("league_detail/$leagueId")
-                    },
-                )
-            }
             composable(
                 route = "league_detail/{leagueId}",
                 arguments = listOf(navArgument("leagueId") { type = NavType.IntType }),
             ) {
                 LeagueDetailScreen(
                     onBack = { navController.popBackStack() },
+                    onNavigateToRoot = onNavigateToRoot,
                     onGameClick = { gameId ->
                         navController.navigate("game_detail/$gameId")
                     },
@@ -198,6 +215,7 @@ fun MainApp() {
             ) {
                 GameDetailScreen(
                     onBack = { navController.popBackStack() },
+                    onNavigateToRoot = onNavigateToRoot,
                     onTeamClick = { teamId, leagueId ->
                         navController.navigate("team_detail/$teamId/$leagueId")
                     },
@@ -212,6 +230,7 @@ fun MainApp() {
             ) {
                 TeamScreen(
                     onBack = { navController.popBackStack() },
+                    onNavigateToRoot = onNavigateToRoot,
                     onGameClick = { gameId ->
                         navController.navigate("game_detail/$gameId")
                     },
@@ -240,5 +259,6 @@ fun MainApp() {
                 )
             }
         }
+        } // CompositionLocalProvider
     }
 }
