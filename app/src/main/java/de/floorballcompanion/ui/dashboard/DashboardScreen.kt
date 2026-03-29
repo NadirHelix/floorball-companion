@@ -51,6 +51,7 @@ data class TeamCardState(
     val pastGames: List<ScheduledGame> = emptyList(),
     val leagues: List<TeamLeagueMapping> = emptyList(),
     val isLoading: Boolean = true,
+    val error: String? = null,
 )
 
 data class LeagueCardState(
@@ -136,6 +137,9 @@ class DashboardViewModel @Inject constructor(
                 .filter { game -> game.result == null && (parseGameDate(game.date)?.let { !it.isBefore(today) } != false) }
                 .sortedBy { it.date }
             val leagues = repository.getLeaguesForTeam(teamId)
+            val debugInfo = if (teamGames.isEmpty()) {
+                "Keine Spiele für Team $teamId in Liga $leagueId (${schedule.size} Spiele total)"
+            } else null
             _teamCards.update { cards ->
                 cards.toMutableList().also {
                     if (index < it.size) {
@@ -146,13 +150,19 @@ class DashboardViewModel @Inject constructor(
                             upcomingGames = upcomingGames,
                             leagues = leagues,
                             isLoading = false,
+                            error = debugInfo,
                         )
                     }
                 }
             }
         } catch (e: Exception) {
             _teamCards.update { cards ->
-                cards.toMutableList().also { if (index < it.size) it[index] = it[index].copy(isLoading = false) }
+                cards.toMutableList().also {
+                    if (index < it.size) it[index] = it[index].copy(
+                        isLoading = false,
+                        error = "Fehler: ${e.message}",
+                    )
+                }
             }
         }
     }
@@ -431,6 +441,13 @@ private fun TeamDashCard(
             if (state.isLoading) {
                 Spacer(Modifier.height(8.dp))
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else if (state.error != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    state.error,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             } else {
                 val teamId = state.favorite.externalId
 
