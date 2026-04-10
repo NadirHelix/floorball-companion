@@ -21,8 +21,8 @@ class LeagueGroupingService @Inject constructor() {
 
     companion object {
         /** Keywords fuer Nicht-Regular-Phasen, spezifischere zuerst. */
-        private val PHASE_KEYWORDS: List<Pair<String, LeaguePhase>> = listOf(
-            "platzierungsrunde" to LeaguePhase.PLAYDOWN,
+        val PHASE_KEYWORDS: List<Pair<String, LeaguePhase>> = listOf(
+            "platzierungsrunde" to LeaguePhase.PLAYOFF,
             "play-offs/play-down" to LeaguePhase.PLAYOFF, // Kombi-Liga: als PLAYOFF behandeln
             "play-downs"        to LeaguePhase.PLAYDOWN,
             "play-down"         to LeaguePhase.PLAYDOWN,
@@ -69,11 +69,14 @@ class LeagueGroupingService @Inject constructor() {
         val regulars = classified.filter { it.second == LeaguePhase.REGULAR }
         val phases = classified.filter { it.second != LeaguePhase.REGULAR }
 
+        // Nur Nicht-Cups als potenzielle Eltern zulassen
+        val parentCandidates = regulars.map { it.first }.filterNot { it.isCup() }
+
         val groupMap = mutableMapOf<Int, MutableList<Pair<LeaguePhase, LeaguePreview>>>()
         val unmatched = mutableListOf<Triple<LeaguePreview, LeaguePhase, String>>()
 
         for ((phaseLeague, phase, baseName) in phases) {
-            val parent = findBestParent(baseName, phaseLeague, regulars.map { it.first })
+            val parent = findBestParent(baseName, phaseLeague, parentCandidates)
             if (parent != null) {
                 groupMap.getOrPut(parent.id) { mutableListOf() }
                     .add(phase to phaseLeague)
@@ -84,18 +87,22 @@ class LeagueGroupingService @Inject constructor() {
 
         val groups = mutableListOf<LeagueGroup>()
 
+        // Nicht-Cups: Related-Leagues aus groupMap
         for ((league, _, _) in regulars) {
+            val related = if (league.isCup()) {
+                emptyList()
+            } else {
+                groupMap[league.id]?.sortedBy { it.second.orderKey?.toIntOrNull() ?: 0 } ?: emptyList()
+            }
             groups.add(
                 LeagueGroup(
                     mainLeague = league,
-                    relatedLeagues = groupMap[league.id]?.sortedBy {
-                        it.second.orderKey?.toIntOrNull() ?: 0
-                    } ?: emptyList()
+                    relatedLeagues = related
                 )
             )
         }
 
-        // Nicht zugeordnete Phasen-Ligen als eigenstaendige Gruppen
+        // Nicht zugeordnete Phasen-Ligen als eigenständige Gruppen
         for ((league, _, _) in unmatched) {
             groups.add(LeagueGroup(mainLeague = league))
         }
@@ -107,7 +114,7 @@ class LeagueGroupingService @Inject constructor() {
      * Erkennt die Phase einer Liga anhand ihres Namens.
      * @return Pair von (Phase, bereinigter Basisname fuer Matching)
      */
-    internal fun detectPhase(name: String): Pair<LeaguePhase, String> {
+    fun detectPhase(name: String): Pair<LeaguePhase, String> {
         val lower = name.lowercase().trim()
 
         for ((keyword, phase) in PHASE_KEYWORDS) {
@@ -191,4 +198,6 @@ class LeagueGroupingService @Inject constructor() {
             .replace(Regex("[\\s-–]+"), " ")
             .replace(Regex("[().]"), "")
             .trim()
+
+    private fun LeaguePreview.isCup(): Boolean = leagueModus.equals("cup", ignoreCase = true)
 }

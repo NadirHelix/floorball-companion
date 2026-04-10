@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Star
@@ -137,6 +136,7 @@ class BrowseViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
+                e.printStackTrace()
                 _uiState.update {
                     it.copy(leaguesLoading = false, leagueGroupsForOperation = emptyList())
                 }
@@ -362,9 +362,6 @@ private fun OperationCard(
                     )
                 } else {
                     // Alle Hauptligen aus den Gruppen flach sammeln (für GF/KF-Gruppierung)
-                    val allMainLeagues = remember(leagueGroups) {
-                        leagueGroups.map { it.mainLeague }
-                    }
                     val gfGroups = remember(leagueGroups) {
                         leagueGroups.filter { it.mainLeague.fieldSize == "GF" }
                     }
@@ -438,7 +435,6 @@ private fun LeagueGroupRow(
     LeagueRow(
         league = group.mainLeague,
         isFavorite = group.mainLeague.id in favoriteIds,
-        hasRelated = group.hasPostSeason,
         onToggleFavorite = { onToggleFavorite(group.mainLeague) },
         onClick = { onLeagueClick(group.mainLeague.id) },
     )
@@ -491,7 +487,6 @@ private fun LeagueGroupRow(
 private fun LeagueRow(
     league: LeaguePreview,
     isFavorite: Boolean,
-    hasRelated: Boolean = false,
     onToggleFavorite: () -> Unit,
     onClick: () -> Unit,
 ) {

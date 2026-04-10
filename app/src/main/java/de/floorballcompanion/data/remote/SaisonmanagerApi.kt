@@ -22,11 +22,6 @@ interface SaisonmanagerApi {
     suspend fun getInit(): InitResponse
 
     // ── Ligen ────────────────────────────────────────────────
-
-    /** Alle Ligen der aktuellen Saison */
-    @GET("leagues.json")
-    suspend fun getAllLeagues(): List<LeaguePreview>
-
     /** Alle Ligen eines Verbands */
     @GET("game_operations/{operationId}/leagues.json")
     suspend fun getLeaguesByOperation(

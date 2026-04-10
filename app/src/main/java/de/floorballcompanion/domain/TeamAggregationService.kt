@@ -3,9 +3,11 @@ package de.floorballcompanion.domain
 import de.floorballcompanion.data.local.dao.CacheDao
 import de.floorballcompanion.data.local.entity.TeamLeagueMapping
 import de.floorballcompanion.data.remote.SaisonmanagerApi
+import de.floorballcompanion.data.remote.model.LeaguePreview
 import de.floorballcompanion.data.remote.model.ScheduledGame
 import de.floorballcompanion.data.remote.model.ScorerEntry
 import de.floorballcompanion.data.remote.model.TableEntry
+import kotlinx.coroutines.yield
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,6 +25,29 @@ class TeamAggregationService @Inject constructor(
     private val api: SaisonmanagerApi,
     private val cacheDao: CacheDao,
 ) {
+    suspend fun getLeaguesForTeam(
+        teamId: Int,
+        teamName: String,
+        knownLeagueId: Int,
+    ): List<TeamLeagueData> {
+        // Check cache first
+        val cached = cacheDao.getLeaguesForTeam(teamId)
+        if (cached.isNotEmpty()) {
+            val otherLeagues = cached.filter { it.leagueId != knownLeagueId }
+            if (otherLeagues.isNotEmpty()) {
+                return otherLeagues.map { mapping ->
+                    loadLeagueDataForTeam(
+                        teamId,
+                        teamName,
+                        mapping.leagueId,
+                        mapping.leagueName,
+                        mapping.gameOperationName
+                    )
+                }
+            }
+        }
+        return emptyList()
+    }
     /**
      * Discovers all leagues a team plays in across ALL game operations (Verbände).
      * Returns only leagues OTHER than [knownLeagueId].
@@ -36,24 +61,16 @@ class TeamAggregationService @Inject constructor(
      */
     suspend fun discoverLeaguesForTeam(
         teamId: Int,
+        teamName: String,
         knownLeagueId: Int,
         onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
     ): List<TeamLeagueData> {
         // Check cache first
         val cached = cacheDao.getLeaguesForTeam(teamId)
-        if (cached.isNotEmpty()) {
-            val otherLeagues = cached.filter { it.leagueId != knownLeagueId }
-            if (otherLeagues.isNotEmpty()) {
-                return otherLeagues.map { mapping ->
-                    loadLeagueDataForTeam(teamId, mapping.leagueId, mapping.leagueName, mapping.gameOperationName)
-                }
-            }
-        }
 
         // One call to get all leagues across all Verbände
         val detail = api.getLeagueDetail(knownLeagueId)
-        val allLeagues = api.getAllLeagues()
-            .filter { it.name.length > 2 } // Filter test/placeholder leagues
+        val allLeagues = getAllLeagues()
 
         onProgress(0, allLeagues.size)
 
@@ -61,15 +78,26 @@ class TeamAggregationService @Inject constructor(
         val results = mutableListOf<TeamLeagueData>()
 
         // Always add the known league to the mapping
-        discoveredMappings.add(
-            TeamLeagueMapping(
-                teamId = teamId,
-                leagueId = knownLeagueId,
-                leagueName = detail.name,
-                gameOperationId = detail.gameOperationId,
-                gameOperationName = detail.gameOperationName,
+        if (cached.isNotEmpty()) {
+            cached.forEach { cachedEntry -> discoveredMappings.add(
+                TeamLeagueMapping(
+                    teamId = teamId,
+                    leagueId = cachedEntry.leagueId,
+                    leagueName = cachedEntry.leagueName,
+                    gameOperationId = cachedEntry.gameOperationId,
+                    gameOperationName = cachedEntry.gameOperationName,
+                ))  }
+        } else {
+            discoveredMappings.add(
+                TeamLeagueMapping(
+                    teamId = teamId,
+                    leagueId = knownLeagueId,
+                    leagueName = detail.name,
+                    gameOperationId = detail.gameOperationId,
+                    gameOperationName = detail.gameOperationName,
+                )
             )
-        )
+        }
 
         // Phase 1: check tables for regular-modus leagues
         val leagueModusLeagues = allLeagues.filter { it.leagueModus == "league" }
@@ -91,7 +119,7 @@ class TeamAggregationService @Inject constructor(
                             gameOperationName = league.gameOperationName,
                         )
                     )
-                    results.add(loadLeagueDataForTeam(teamId, league.id, league.name, league.gameOperationName))
+                    results.add(loadLeagueDataForTeam(teamId, teamName,league.id, league.name, league.gameOperationName))
                 }
             } catch (_: Exception) {
                 // Skip leagues that fail (e.g. no table yet, 500)
@@ -107,7 +135,11 @@ class TeamAggregationService @Inject constructor(
 
             try {
                 val schedule = api.getSchedule(league.id)
-                if (schedule.any { it.homeTeamId == teamId || it.guestTeamId == teamId }) {
+                if (schedule.any{
+                        it.homeTeamName == teamName || it.guestTeamName == teamName
+                    } && schedule.any{
+                    val game = api.getGame(it.gameId ?: 0)
+                        game.homeTeamId == teamId || game.guestTeamId == teamId} ) {
                     discoveredMappings.add(
                         TeamLeagueMapping(
                             teamId = teamId,
@@ -118,19 +150,14 @@ class TeamAggregationService @Inject constructor(
                         )
                     )
 
-                    val teamScorers = try {
-                        api.getScorer(league.id).filter { it.teamId == teamId }
-                    } catch (_: Exception) { emptyList() }
-
                     results.add(
                         TeamLeagueData(
                             leagueId = league.id,
                             leagueName = league.name,
                             gameOperationName = league.gameOperationName,
                             schedule = schedule.filter {
-                                it.homeTeamId == teamId || it.guestTeamId == teamId
-                            },
-                            scorers = teamScorers,
+                                it.homeTeamName == teamName || it.guestTeamName == teamName
+                            }
                         )
                     )
                 }
@@ -147,15 +174,24 @@ class TeamAggregationService @Inject constructor(
         return results
     }
 
+    private suspend fun getAllLeagues(): List<LeaguePreview> {
+        val init = api.getInit();
+        val allLeagues = mutableListOf<LeaguePreview>()
+        init.gameOperations.forEach { gameOperation -> api.getLeaguesByOperation(gameOperation.id)
+            .forEach{ allLeagues.add(it) }}
+        return allLeagues.filter { it.name.length > 2 } // Filter test/placeholder leagues
+    }
+
     private suspend fun loadLeagueDataForTeam(
         teamId: Int,
+        teamName: String,
         leagueId: Int,
         leagueName: String,
         gameOperationName: String,
     ): TeamLeagueData {
         val schedule = try {
             api.getSchedule(leagueId).filter {
-                it.homeTeamId == teamId || it.guestTeamId == teamId
+                it.homeTeamName == teamName || it.guestTeamName == teamName
             }
         } catch (_: Exception) { emptyList() }
 

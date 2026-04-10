@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(ExperimentalLayoutApi::class)
 
 package de.floorballcompanion.ui.dashboard
 
@@ -31,8 +31,10 @@ import de.floorballcompanion.data.remote.model.TableEntry
 import de.floorballcompanion.data.repository.FloorballRepository
 import de.floorballcompanion.ui.components.TeamLogo
 import de.floorballcompanion.ui.team.TeamFavoriteColor
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -119,16 +121,22 @@ class DashboardViewModel @Inject constructor(
     }
 
     private suspend fun loadTeamCard(index: Int, fav: FavoriteEntity) {
-        val leagueId = fav.leagueId ?: run {
+        fav.leagueId ?: run {
             _teamCards.update { cards ->
-                cards.toMutableList().also { if (index < it.size) it[index] = it[index].copy(isLoading = false) }
+                cards.toMutableList().also { if (index < it.size) it[index] = it[index].copy(isLoading = true) }
             }
             return
         }
         try {
-            val schedule = repository.getSchedule(leagueId)
+            val teamName = fav.name
             val teamId = fav.externalId
-            val teamGames = schedule.filter { it.homeTeamId == teamId || it.guestTeamId == teamId }
+            val leagueId = fav.leagueId
+            val leagues = repository.getLeaguesForTeam(teamId)
+            val schedules = leagues.map { repository.getSchedule(it.leagueId) }.toMutableList()
+            if (!leagues.map { it.leagueId }.contains(leagueId)) {
+                schedules.add(0, repository.getSchedule(leagueId))
+            }
+            val teamGames : List<ScheduledGame> = schedules.flatten().filter { it.homeTeamName == teamName || it.guestTeamName == teamName }
             val today = LocalDate.now()
             val pastGames = teamGames
                 .filter { game -> game.result != null || parseGameDate(game.date)?.isBefore(today) == true }
@@ -136,9 +144,8 @@ class DashboardViewModel @Inject constructor(
             val upcomingGames = teamGames
                 .filter { game -> game.result == null && (parseGameDate(game.date)?.let { !it.isBefore(today) } != false) }
                 .sortedBy { it.date }
-            val leagues = repository.getLeaguesForTeam(teamId)
             val debugInfo = if (teamGames.isEmpty()) {
-                "Keine Spiele für Team $teamId in Liga $leagueId (${schedule.size} Spiele total)"
+                "Keine Spiele für Team $teamId gefunden"
             } else null
             _teamCards.update { cards ->
                 cards.toMutableList().also {
@@ -172,10 +179,10 @@ class DashboardViewModel @Inject constructor(
             coroutineScope {
                 val gameDayDeferred = async { repository.getCurrentGameDay(fav.externalId) }
                 val tableDeferred = async {
-                    try { repository.refreshTable(fav.externalId) } catch (_: Exception) { emptyList() }
+                    try { repository.refreshTableWithClubDiscovery(fav.externalId, fav.leagueName?: "", fav.gameOperationName?: "") } catch (_: Exception) { emptyList() }
                 }
                 val scorerDeferred = async {
-                    try { repository.getScorer(fav.externalId) } catch (e: Exception) { emptyList<ScorerEntry>() }
+                    try { repository.getScorer(fav.externalId) } catch (e: Exception) { emptyList() }
                 }
                 val gameDay = gameDayDeferred.await()
                 val table = tableDeferred.await()
@@ -228,10 +235,21 @@ class DashboardViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
+
+            val jobs = mutableListOf<Deferred<Unit>>()
+
             val leagues = favoriteLeagues.value
             leagues.forEachIndexed { index, fav ->
-                launch { loadLeagueCard(index, fav) }
+                jobs += async { loadLeagueCard(index, fav) }
             }
+
+            val teams = favoriteTeams.value
+            teams.forEachIndexed { index, fav ->
+                jobs += async { loadTeamCard(index, fav) }
+            }
+
+            jobs.awaitAll()
+
             _isRefreshing.value = false
         }
     }
@@ -259,6 +277,7 @@ class DashboardViewModel @Inject constructor(
 @Composable
 fun DashboardScreen(
     onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
+    onGameClick: (gameId: Int) -> Unit = {},
     onLeagueClick: (leagueId: Int) -> Unit = {},
     viewModel: DashboardViewModel = hiltViewModel(),
 ) {
@@ -323,7 +342,7 @@ fun DashboardScreen(
                     }
                     IconButton(onClick = { viewModel.refresh() }) {
                         if (isRefreshing) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         } else {
                             Icon(Icons.Default.Refresh, contentDescription = "Aktualisieren")
                         }
@@ -340,6 +359,7 @@ fun DashboardScreen(
                     onTeamClick = {
                         onTeamClick(state.favorite.externalId, state.favorite.leagueId ?: 0)
                     },
+                    onGameClick = onGameClick,
                     onLeagueClick = onLeagueClick,
                 )
             }
@@ -351,7 +371,7 @@ fun DashboardScreen(
                     selectedTab = selectedTab,
                     onTabSelected = { tab -> viewModel.selectLeagueTab(state.favorite.externalId, tab) },
                     onLeagueClick = { onLeagueClick(state.favorite.externalId) },
-                    onGameClick = { /* no game navigation from dashboard */ },
+                    onGameClick = onGameClick,
                 )
             }
         }
@@ -395,6 +415,7 @@ private fun LiveBadge() {
 private fun TeamDashCard(
     state: TeamCardState,
     onTeamClick: () -> Unit,
+    onGameClick: (gameId: Int) -> Unit,
     onLeagueClick: (leagueId: Int) -> Unit,
 ) {
     Card(
@@ -449,7 +470,7 @@ private fun TeamDashCard(
                     color = MaterialTheme.colorScheme.error,
                 )
             } else {
-                val teamId = state.favorite.externalId
+                val teamName = state.favorite.name
 
                 // Next game(s) - expandable
                 if (state.upcomingGames.isNotEmpty()) {
@@ -459,7 +480,8 @@ private fun TeamDashCard(
                     DashExpandableGameSection(
                         title = "Nächstes Spiel",
                         games = state.upcomingGames,
-                        teamId = teamId,
+                        teamName = teamName,
+                        onGameClick = onGameClick,
                     )
                 }
 
@@ -471,14 +493,13 @@ private fun TeamDashCard(
                     DashExpandableGameSection(
                         title = "Zuletzt gespielt",
                         games = state.pastGames,
-                        teamId = teamId,
+                        teamName = teamName,
+                        onGameClick = onGameClick,
                     )
                 }
 
                 // Leagues
-                val displayLeagues = if (state.leagues.isNotEmpty()) {
-                    state.leagues
-                } else {
+                val displayLeagues = state.leagues.ifEmpty {
                     // Fallback: show primary league from favorite
                     state.favorite.leagueId?.let { lid ->
                         listOf(
@@ -519,13 +540,16 @@ private fun TeamDashCard(
 }
 
 @Composable
-private fun DashGameRow(game: ScheduledGame, teamId: Int) {
-    val isHome = game.homeTeamId == teamId
+private fun DashGameRow(game: ScheduledGame, teamName: String,
+                        onGameClick: (gameId: Int) -> Unit = {}) {
+    val isHome = game.homeTeamName == teamName
     val opponentName = if (isHome) game.guestTeamName else game.homeTeamName
     val opponentLogo = if (isHome) game.guestTeamLogo else game.homeTeamLogo
+    val gameId = game.gameId?: 0
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth()
+            .then(if (gameId > 0) Modifier.clickable { onGameClick(gameId) } else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -575,7 +599,8 @@ private fun DashGameRow(game: ScheduledGame, teamId: Int) {
 private fun DashExpandableGameSection(
     title: String,
     games: List<ScheduledGame>,
-    teamId: Int,
+    teamName: String,
+    onGameClick: (gameId: Int) -> Unit = {},
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -585,7 +610,7 @@ private fun DashExpandableGameSection(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(2.dp))
-    DashGameRow(game = games.first(), teamId = teamId)
+    DashGameRow(game = games.first(), teamName = teamName, onGameClick)
 
     if (games.size > 1) {
         Row(
@@ -614,7 +639,7 @@ private fun DashExpandableGameSection(
             Column(modifier = Modifier.padding(top = 2.dp)) {
                 games.drop(1).forEach { game ->
                     Spacer(Modifier.height(2.dp))
-                    DashGameRow(game = game, teamId = teamId)
+                    DashGameRow(game, teamName, onGameClick)
                 }
             }
         }
@@ -695,7 +720,10 @@ private fun LeagueDashCard(
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    listOf("Spieltag", "Tabelle", "Scorer").forEachIndexed { index, title ->
+                    val tabs = if (state.table.isNotEmpty()) listOf("Spieltag", "Tabelle", "Scorer")
+                    else listOf("Spieltag", "Scorer")
+
+                    tabs.forEachIndexed { index, title ->
                         FilterChip(
                             selected = selectedTab == index,
                             onClick = { onTabSelected(index) },
@@ -711,9 +739,9 @@ private fun LeagueDashCard(
                 }
 
                 when (selectedTab) {
-                    0 -> LeagueGameDayTab(state = state)
-                    1 -> LeagueTableTab(state = state)
-                    2 -> LeagueScorerTab(state = state)
+                    0 -> LeagueGameDayTab(state, onGameClick)
+                    1 -> LeagueTableTab(state)
+                    2 -> LeagueScorerTab(state)
                 }
             }
         }
@@ -721,7 +749,8 @@ private fun LeagueDashCard(
 }
 
 @Composable
-private fun LeagueGameDayTab(state: LeagueCardState) {
+private fun LeagueGameDayTab(state: LeagueCardState,
+                             onGameClick: (gameId: Int) -> Unit = {},) {
     if (state.currentGameDay.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -736,7 +765,7 @@ private fun LeagueGameDayTab(state: LeagueCardState) {
     } else {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             state.currentGameDay.forEach { game ->
-                GameDayRow(game = game)
+                GameDayRow(game, onGameClick)
                 Spacer(Modifier.height(4.dp))
             }
         }
@@ -744,10 +773,13 @@ private fun LeagueGameDayTab(state: LeagueCardState) {
 }
 
 @Composable
-private fun GameDayRow(game: ScheduledGame) {
+private fun GameDayRow(game: ScheduledGame,
+                       onGameClick: (gameId: Int) -> Unit = {},) {
     val isLive = game.gameStatus == "live"
+    val gameId = game.gameId?: 0
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth()
+            .then(if (gameId > 0) Modifier.clickable { onGameClick(gameId) } else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

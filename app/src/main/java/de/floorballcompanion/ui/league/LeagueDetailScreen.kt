@@ -3,7 +3,19 @@ package de.floorballcompanion.ui.league
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -15,16 +27,42 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import de.floorballcompanion.LocalOriginTabIcon
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.toUpperCase
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -32,6 +70,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import de.floorballcompanion.LocalOriginTabIcon
 import de.floorballcompanion.data.local.entity.FavoriteEntity
 import de.floorballcompanion.data.remote.model.GameDayTitle
 import de.floorballcompanion.data.remote.model.ScheduledGame
@@ -39,9 +78,14 @@ import de.floorballcompanion.data.remote.model.ScorerEntry
 import de.floorballcompanion.data.remote.model.TableEntry
 import de.floorballcompanion.data.repository.FloorballRepository
 import de.floorballcompanion.domain.LeagueGroupingService
+import de.floorballcompanion.domain.LeagueGroupingService.Companion.PHASE_KEYWORDS
 import de.floorballcompanion.domain.PlayoffService
-import de.floorballcompanion.domain.model.*
+import de.floorballcompanion.domain.model.LeaguePhase
+import de.floorballcompanion.domain.model.PlayoffRound
+import de.floorballcompanion.domain.model.PlayoffSeries
+import de.floorballcompanion.domain.model.TeamInfo
 import de.floorballcompanion.ui.components.TeamLogo
+import de.floorballcompanion.ui.team.TeamFavoriteColor
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -94,9 +138,14 @@ data class LeagueDetailUiState(
     val championshipGames: List<ScheduledGame> = emptyList(),
     val leagueModus: String? = null,
 
+    val selectedTableType: TableType = TableType.TOTAL,
+    val homeTable: List<TableEntry> = emptyList(),
+    val awayTable: List<TableEntry> = emptyList(),
+
     val phaseLoading: Boolean = false,
 ) {
-    val currentGameDayNumber: Int? get() = availableGameDays.getOrNull(currentGameDayIndex)
+    val currentGameDayNumber: Int? get() = if (availableGameDays.isNotEmpty()) availableGameDays.getOrNull(currentGameDayIndex)
+            else currentGameDayIndex
     val gamesForCurrentDay: List<ScheduledGame>
         get() = allGames.filter {
             it.gameDayNumber == currentGameDayNumber && (it.gameNumber ?: 0) > 0
@@ -121,7 +170,7 @@ class LeagueDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    private val leagueId: Int = savedStateHandle.get<Int>("leagueId") ?: 0
+    val leagueId: Int = savedStateHandle.get<Int>("leagueId") ?: 0
 
     private val _uiState = MutableStateFlow(LeagueDetailUiState())
     val uiState = _uiState.asStateFlow()
@@ -155,7 +204,7 @@ class LeagueDetailViewModel @Inject constructor(
                 }
 
                 // Phase-Erkennung: zugehoerige Ligen finden
-                discoverPhases(detail.gameOperationId, leagueId)
+                discoverPhases(detail.gameOperationId, leagueId, detail.name)
 
                 // Daten fuer die initial ausgewaehlte Phase laden
                 val currentPhaseTab = _uiState.value.phaseTabs.getOrNull(_uiState.value.selectedPhaseIndex)
@@ -166,7 +215,7 @@ class LeagueDetailViewModel @Inject constructor(
                     loadPlayoffData(leagueId)
                 } else {
                     // Keine Phasen gefunden: normal laden
-                    loadRegularData(leagueId, detail.gameDayTitles)
+                    loadRegularData(leagueId, detail.name, detail.gameOperationName, detail.gameDayTitles)
                 }
 
                 _uiState.update { it.copy(isLoading = false) }
@@ -178,7 +227,7 @@ class LeagueDetailViewModel @Inject constructor(
         }
     }
 
-    private suspend fun discoverPhases(gameOperationId: Int, currentLeagueId: Int) {
+    private suspend fun discoverPhases(gameOperationId: Int, currentLeagueId: Int, leagueName: String) {
         try {
             val allLeagues = repository.getLeaguesByOperation(gameOperationId)
                 .filter { it.name.length > 2 }
@@ -210,15 +259,19 @@ class LeagueDetailViewModel @Inject constructor(
                     tabs.add(PhaseTabInfo(LeaguePhase.RELEGATION, relegations.first().second.id, "Relegation"))
                 }
 
-                // Bestimme welcher Tab initial ausgewaehlt sein soll
-                val initialIndex = tabs.indexOfFirst { it.leagueId == currentLeagueId }
-                    .coerceAtLeast(0)
+                // Bestimme welcher Tab initial ausgewählt sein soll
+                val explicitIndex = findPhaseIndexForLeague(tabs, leagueId, leagueName)
+                val autoIndex = determineBestPhaseIndex(tabs)
+
+                val bestIndex = explicitIndex ?: autoIndex
+
 
                 _mainLeagueId.value = group.mainLeague.id
+
                 _uiState.update {
                     it.copy(
                         phaseTabs = tabs,
-                        selectedPhaseIndex = initialIndex,
+                        selectedPhaseIndex = bestIndex,
                         leagueName = group.mainLeague.name, // Immer Hauptliga-Name anzeigen
                     )
                 }
@@ -228,10 +281,10 @@ class LeagueDetailViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadRegularData(leagueId: Int, gameDayTitlesFromDetail: List<GameDayTitle>? = null) {
+    private suspend fun loadRegularData(leagueId: Int, leagueName: String, gameOperationName: String, gameDayTitlesFromDetail: List<GameDayTitle>? = null) {
         val scheduleDeferred = viewModelScope.async { repository.getSchedule(leagueId) }
         val tableDeferred = viewModelScope.async {
-            try { repository.refreshTable(leagueId) } catch (_: Exception) { emptyList() }
+            try { repository.refreshTableWithClubDiscovery(leagueId, leagueName, gameOperationName) } catch (_: Exception) { emptyList() }
         }
         val scorerDeferred = viewModelScope.async { repository.getScorer(leagueId) }
 
@@ -239,21 +292,21 @@ class LeagueDetailViewModel @Inject constructor(
         val table = tableDeferred.await()
         val scorers = scorerDeferred.await()
 
+        val homeTable = buildTable(schedule, TableType.HOME)
+        val awayTable = buildTable(schedule, TableType.AWAY)
+
         val availableGameDays = schedule
             .mapNotNull { it.gameDayNumber }
             .distinct()
             .sorted()
 
-        val gameDayTitles = if (gameDayTitlesFromDetail != null) {
-            gameDayTitlesFromDetail.associate { it.gameDayNumber to it.title }
-        } else {
-            try {
+        val gameDayTitles = gameDayTitlesFromDetail?.associate { it.gameDayNumber to it.title }
+            ?: try {
                 val detail = repository.getLeagueDetail(leagueId)
                 detail.gameDayTitles.associate { it.gameDayNumber to it.title }
             } catch (_: Exception) {
                 emptyMap()
             }
-        }
 
         val currentDayNumber = determineCurrentGameDayNumber(schedule)
         val currentIndex = availableGameDays.indexOf(currentDayNumber).coerceAtLeast(0)
@@ -265,6 +318,8 @@ class LeagueDetailViewModel @Inject constructor(
                 gameDayTitles = gameDayTitles,
                 currentGameDayIndex = currentIndex,
                 table = table,
+                homeTable = homeTable,
+                awayTable = awayTable,
                 scorers = scorers,
                 selectedTab = 0,
             )
@@ -290,8 +345,8 @@ class LeagueDetailViewModel @Inject constructor(
         if (isChamp) {
             // Platzhalter filtern
             val validGames = schedule.filter { (it.gameNumber ?: 0) > 0 }
-            _uiState.update {
-                it.copy(
+            _uiState.update { state ->
+                state.copy(
                     isChampionshipFormat = true,
                     championshipGames = validGames.sortedWith(compareBy({ it.date }, { it.time }, { it.gameNumber })),
                     playoffScorers = scorers,
@@ -301,12 +356,16 @@ class LeagueDetailViewModel @Inject constructor(
             }
         } else {
             val isCup = modus == "cup"
-            val rounds = if (isCup) playoffService.buildCupRounds(schedule) else playoffService.buildRounds(schedule)
+            val rounds = if (isCup) playoffService.buildCupRounds(schedule, detail?.name?.contains("FD-Pokal")?: false) else playoffService.buildRounds(schedule)
+            val gameDayTitles : Map<Int, String> = rounds.mapIndexed { index, round ->  index to round.name}.toMap()
+            val currentRoundIndex = determineCurrentRoundIndex(rounds)
             _uiState.update {
                 it.copy(
                     isChampionshipFormat = false,
+                    availableGameDays = List(rounds.size) { index -> index },
                     playoffRounds = rounds,
-                    currentRoundIndex = 0,
+                    gameDayTitles = gameDayTitles,
+                    currentRoundIndex = currentRoundIndex,
                     playoffScorers = scorers,
                     championshipGames = emptyList(),
                     selectedTab = 0,
@@ -315,10 +374,70 @@ class LeagueDetailViewModel @Inject constructor(
         }
     }
 
+    private fun isGameRelevant(game: ScheduledGame, today: LocalDate): Boolean {
+        val date = parseDate(game.date) ?: return false
+        return date.plusDays(3).isAfter(today)
+    }
+
+    private fun isGameLive(game: ScheduledGame): Boolean {
+        return game.gameStatus == "live"
+    }
+
+    private fun findPhaseIndexForLeague(
+        tabs: List<PhaseTabInfo>,
+        leagueId: Int,
+        leagueName: String
+    ): Int? {
+        val index = tabs.indexOfFirst { it.leagueId == leagueId && PHASE_KEYWORDS.any { keyword -> leagueName.lowercase().contains(keyword.first) } }
+        return if (index >= 0) index else null
+    }
+
+    private suspend fun determineBestPhaseIndex(tabs: List<PhaseTabInfo>): Int {
+        val today = LocalDate.now()
+
+        val schedulesPerPhase = tabs.map { tab ->
+            tab to try {
+                repository.getSchedule(tab.leagueId)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
+        // 1. Priorität: LIVE
+        schedulesPerPhase.forEachIndexed { index, (_, schedule) ->
+            if (schedule.any { isGameLive(it) }) return index
+        }
+
+        // 2. Priorität: aktuelle Spiele
+        schedulesPerPhase.forEachIndexed { index, (_, schedule) ->
+            if (schedule.any { isGameRelevant(it, today) }) return index
+        }
+
+        // 3. Fallback: letzte Phase
+        return tabs.lastIndex
+    }
+
+    private fun determineCurrentRoundIndex(rounds: List<PlayoffRound>): Int {
+        val today = LocalDate.now()
+
+        rounds.forEachIndexed { index, round ->
+            val latestGameDate = round.series
+                .flatMap { it.games }
+                .mapNotNull { parseDate(it.date) }
+                .maxOrNull()
+
+            if (latestGameDate != null && latestGameDate.plusDays(3).isAfter(today)) {
+                return index
+            }
+        }
+
+        return rounds.lastIndex
+    }
+
     private suspend fun loadPhaseData(tab: PhaseTabInfo) {
         if (tab.phase == LeaguePhase.REGULAR) {
             val detail = repository.getLeagueDetail(tab.leagueId)
-            loadRegularData(tab.leagueId, detail.gameDayTitles)
+            loadRegularData(tab.leagueId, detail.name, detail.gameOperationName, detail.gameDayTitles)
         } else {
             loadPlayoffData(tab.leagueId)
         }
@@ -387,6 +506,10 @@ class LeagueDetailViewModel @Inject constructor(
             }
         }
     }
+
+    fun selectTableType(type: TableType) {
+        _uiState.update { it.copy(selectedTableType = type) }
+    }
 }
 
 // -- Hilfsfunktionen ----------------------------------------------------------
@@ -454,6 +577,7 @@ private fun isTeamTbd(game: ScheduledGame, isHome: Boolean): Boolean {
 
 // -- Screen -------------------------------------------------------------------
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LeagueDetailScreen(
     onBack: () -> Unit,
@@ -465,97 +589,135 @@ fun LeagueDetailScreen(
     val uiState by viewModel.uiState.collectAsState()
     val isFavorite by viewModel.isFavorite.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Header with status bar coloring
-        Surface(color = MaterialTheme.colorScheme.primaryContainer) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurueck")
-                }
-                Text(
-                    text = uiState.leagueName.ifEmpty { "Liga Details" },
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-                if (onNavigateToRoot != null) {
-                    IconButton(onClick = onNavigateToRoot) {
-                        Icon(LocalOriginTabIcon.current, contentDescription = "Zur Hauptseite")
-                    }
-                }
-                IconButton(onClick = { viewModel.toggleFavorite() }) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                        contentDescription = if (isFavorite) "Favorit entfernen" else "Als Favorit markieren",
-                        tint = if (isFavorite) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        when {
-            uiState.isLoading -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-            uiState.error != null -> {
-                Box(
-                    Modifier.fillMaxSize().padding(32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
                         Text(
-                            "Fehler: ${uiState.error}",
-                            color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center,
+                            text = uiState.leagueName.ifEmpty { "Liga Details" },
+                            maxLines = 1,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
                         )
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = { viewModel.retry() }) { Text("Erneut versuchen") }
+                        if (!uiState.gameOperationSlug.isNullOrEmpty()) {
+                            Text(
+                                uiState.gameOperationSlug!!.toUpperCase(Locale.current),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurueck")
+                    }
+                },
+                actions = {
+                    if (onNavigateToRoot != null) {
+                        IconButton(onClick = onNavigateToRoot) {
+                            Icon(LocalOriginTabIcon.current, contentDescription = "Zur Hauptseite")
+                        }
+                    }
+                    IconButton(onClick = { viewModel.toggleFavorite() }) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                            contentDescription = if (isFavorite) "Favorit entfernen" else "Als Favorit markieren",
+                            tint = if (isFavorite) TeamFavoriteColor
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+        ) {
+            when {
+                uiState.isLoading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
                     }
                 }
-            }
-            else -> {
-                // Phase-Tabs (Hauptrunde / Playoffs / Playdowns)
-                if (uiState.hasPhases) {
-                    ScrollableTabRow(
-                        selectedTabIndex = uiState.selectedPhaseIndex,
-                        edgePadding = 8.dp,
-                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+
+                uiState.error != null -> {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        uiState.phaseTabs.forEachIndexed { index, tab ->
-                            Tab(
-                                selected = uiState.selectedPhaseIndex == index,
-                                onClick = { viewModel.selectPhaseTab(index) },
-                                text = {
-                                    Text(
-                                        tab.label,
-                                        fontWeight = if (uiState.selectedPhaseIndex == index)
-                                            FontWeight.Bold else FontWeight.Normal,
-                                    )
-                                },
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "Fehler: ${uiState.error}",
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center,
                             )
+                            Spacer(Modifier.height(12.dp))
+                            Button(onClick = { viewModel.retry() }) { Text("Erneut versuchen") }
                         }
                     }
                 }
 
-                if (uiState.phaseLoading) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+                else -> {
+                    // Tabs oben, separiert vom Content
+                    if (uiState.hasPhases) {
+                        ScrollableTabRow(
+                            selectedTabIndex = uiState.selectedPhaseIndex,
+                            edgePadding = 8.dp,
+                            // Entferne Transparenz, damit nichts durchscheint
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        ) {
+                            uiState.phaseTabs.forEachIndexed { index, tab ->
+                                Tab(
+                                    selected = uiState.selectedPhaseIndex == index,
+                                    onClick = { viewModel.selectPhaseTab(index) },
+                                    text = {
+                                        Text(
+                                            tab.label,
+                                            fontWeight = if (uiState.selectedPhaseIndex == index)
+                                                FontWeight.Bold else FontWeight.Normal,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                        HorizontalDivider()
                     }
-                } else if (uiState.isPlayoffPhase) {
-                    PlayoffPhaseContent(uiState, viewModel, onGameClick)
-                } else {
-                    RegularPhaseContent(uiState, viewModel, onGameClick)
+
+                    // Inhalt füllt den Rest unterhalb der Tabs
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f) // wichtig: nimmt den verbleibenden Platz
+                    ) {
+                        when {
+                            uiState.phaseLoading -> {
+                                // Ladeindikator innerhalb des Content‑Bereichs
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator()
+                                }
+                            }
+                            uiState.isPlayoffPhase -> {
+                                PlayoffPhaseContent(uiState, viewModel, onGameClick)
+                            }
+                            uiState.leagueModus == "cup"-> {
+                               CupContent(uiState, viewModel, onGameClick)
+                            }
+                            else -> {
+                                RegularPhaseContent(uiState, viewModel, onGameClick, onTeamClick)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -569,20 +731,142 @@ private fun RegularPhaseContent(
     uiState: LeagueDetailUiState,
     viewModel: LeagueDetailViewModel,
     onGameClick: (Int) -> Unit,
+    onTeamClick: (teamId: Int, leagueId: Int) -> Unit = { _, _ -> },
 ) {
-    TabRow(selectedTabIndex = uiState.selectedTab) {
-        listOf("Spieltag", "Tabelle", "Scorer").forEachIndexed { index, title ->
-            Tab(
-                selected = uiState.selectedTab == index,
-                onClick = { viewModel.selectTab(index) },
-                text = { Text(title) },
+    Column {
+        TabRow(
+            selectedTabIndex = uiState.selectedTab,
+            containerColor = MaterialTheme.colorScheme.surface,
+            divider = { HorizontalDivider() },
+        ) {
+            listOf("Spieltag", "Tabelle", "Scorer").forEachIndexed { index, title ->
+                Tab(
+                    selected = uiState.selectedTab == index,
+                    onClick = { viewModel.selectTab(index) },
+                    text = { Text(title) },
+                )
+            }
+        }
+        when (uiState.selectedTab) {
+            0 -> GameDayTab(
+                uiState,
+                { viewModel.previousGameDay() },
+                { viewModel.nextGameDay() },
+                onGameClick
             )
+
+            1 -> TableTab(
+                uiState = uiState,
+                onTeamClick = onTeamClick,
+                leagueId = viewModel.leagueId,
+                onTableTypeChange = { viewModel.selectTableType(it) }
+            )
+            2 -> ScorerTab(uiState.scorers, uiState.table)
         }
     }
-    when (uiState.selectedTab) {
-        0 -> GameDayTab(uiState, { viewModel.previousGameDay() }, { viewModel.nextGameDay() }, onGameClick)
-        1 -> TableTab(uiState.table)
-        2 -> ScorerTab(uiState.scorers)
+}
+
+@Composable
+private fun CupContent(
+    uiState: LeagueDetailUiState,
+    viewModel: LeagueDetailViewModel,
+    onGameClick: (Int) -> Unit,
+) {
+    val tabs = listOf("Runden", "Scorer")
+    Column {
+        TabRow(selectedTabIndex = uiState.selectedTab) {
+            tabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = uiState.selectedTab == index,
+                    onClick = { viewModel.selectTab(index) },
+                    text = { Text(title) },
+                )
+            }
+        }
+        when (uiState.selectedTab) {
+            0 -> CupRoundTab(
+                uiState = uiState,
+                onPrevious = { viewModel.previousRound() },
+                onNext = { viewModel.nextRound() },
+                onGameClick = onGameClick,
+            )
+            1 -> ScorerTab(uiState.playoffScorers, uiState.table)
+        }
+    }
+}
+
+// Pokal spiele
+
+@Composable
+private fun CupRoundTab(
+    uiState: LeagueDetailUiState,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onGameClick: (Int) -> Unit,
+) {
+    val rounds = uiState.playoffRounds
+    if (rounds.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Noch keine Pokalspiele", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        return
+    }
+
+    val roundIndex = uiState.currentRoundIndex
+    val round = rounds.getOrNull(roundIndex) ?: return
+    val title = uiState.gameDayTitles[roundIndex] ?: round.name
+
+    // Navigation Kopfzeile
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = onPrevious,
+            enabled = roundIndex > 0,
+        ) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Vorherige Runde")
+        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.Center,
+        )
+        IconButton(
+            onClick = onNext,
+            enabled = roundIndex < rounds.size - 1,
+        ) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Nächste Runde")
+        }
+    }
+
+    HorizontalDivider()
+
+    // Spiele der Runde direkt als Karten anzeigen
+    val games = remember(round) {
+        round.series
+            .flatMap { it.games }
+            .filter { (it.gameNumber ?: 0) > 0 }
+            .sortedWith(compareBy({ it.date }, { it.time }, { it.gameNumber }))
+    }
+
+    if (games.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Keine Spiele in dieser Runde", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 8.dp),
+        ) {
+            items(games, key = { it.resolvedGameId }) { game ->
+                GameCard(game, onGameClick, title)
+            }
+        }
     }
 }
 
@@ -595,24 +879,32 @@ private fun PlayoffPhaseContent(
     onGameClick: (Int) -> Unit,
 ) {
     val tabs = listOf("Runden", "Scorer")
-    TabRow(selectedTabIndex = uiState.selectedTab) {
-        tabs.forEachIndexed { index, title ->
-            Tab(
-                selected = uiState.selectedTab == index,
-                onClick = { viewModel.selectTab(index) },
-                text = { Text(title) },
-            )
-        }
-    }
-    when (uiState.selectedTab) {
-        0 -> {
-            if (uiState.isChampionshipFormat) {
-                ChampionshipTab(uiState.championshipGames, onGameClick)
-            } else {
-                PlayoffRoundTab(uiState, { viewModel.previousRound() }, { viewModel.nextRound() }, onGameClick)
+    Column {
+        TabRow(selectedTabIndex = uiState.selectedTab) {
+            tabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = uiState.selectedTab == index,
+                    onClick = { viewModel.selectTab(index) },
+                    text = { Text(title) },
+                )
             }
         }
-        1 -> ScorerTab(uiState.playoffScorers)
+        when (uiState.selectedTab) {
+            0 -> {
+                if (uiState.isChampionshipFormat) {
+                    ChampionshipTab(uiState.championshipGames, onGameClick)
+                } else {
+                    PlayoffRoundTab(
+                        uiState,
+                        { viewModel.previousRound() },
+                        { viewModel.nextRound() },
+                        onGameClick
+                    )
+                }
+            }
+
+            1 -> ScorerTab(uiState.playoffScorers, uiState.table)
+        }
     }
 }
 
@@ -731,7 +1023,7 @@ private fun PlayoffRoundTab(
 // -- Series Card (aufklappbar) ------------------------------------------------
 
 /** Vergleicht ob ein TeamInfo dem Gewinner entspricht — nutzt Namen als Fallback wenn id=0 */
-private fun isSeriesWinner(winner: de.floorballcompanion.domain.model.TeamInfo?, team: de.floorballcompanion.domain.model.TeamInfo): Boolean {
+private fun isSeriesWinner(winner: TeamInfo?, team: TeamInfo): Boolean {
     if (winner == null) return false
     return if (winner.id != 0 && team.id != 0) winner.id == team.id else winner.name == team.name
 }
@@ -741,6 +1033,7 @@ private fun SeriesCard(series: PlayoffSeries, onGameClick: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val isDecided = series.isCompleted
     val winner = series.winner
+    val isAnyLive = series.games.any{ isLive(it) }
 
     Card(
         modifier = Modifier
@@ -758,6 +1051,20 @@ private fun SeriesCard(series: PlayoffSeries, onGameClick: (Int) -> Unit) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (isAnyLive) {
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.error,
+                ) {
+                    Text(
+                        "LIVE",
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onError,
+                    )
+                }
             }
 
             Spacer(Modifier.height(6.dp))
@@ -906,6 +1213,7 @@ private fun SeriesGameRow(
         parseDate(game.date)?.format(deDotDateFmt) ?: game.date
     }
     val hasResult = game.homeGoals != null && game.guestGoals != null
+    val isLive = isLive(game)
     val alpha = if (isOptional) 0.4f else 1f
     val gameId = game.resolvedGameId
 
@@ -934,6 +1242,20 @@ private fun SeriesGameRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (isLive) {
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.error,
+                ) {
+                    Text(
+                        "LIVE",
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onError,
+                    )
+                }
+            }
             Spacer(Modifier.height(2.dp))
 
             Row(
@@ -968,6 +1290,7 @@ private fun SeriesGameRow(
                                 if (postfix.isNotEmpty()) " $postfix" else "",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
+                            color = if (isLive) { MaterialTheme.colorScheme.error } else MaterialTheme.colorScheme.onSurface
                         )
                         // Drittelergebnisse
                         val periods = periodScoresText(game)
@@ -1021,7 +1344,7 @@ private fun GameDayTab(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         val dayNumber = uiState.currentGameDayNumber
-        val dayTitle = dayNumber?.let { uiState.gameDayTitles[it] ?: "$it. Spieltag" } ?: "Spieltag"
+        val dayTitle = dayNumber?.let { uiState.gameDayTitles[it] ?: "$it. Spieltag" } ?:  "Spieltag"
 
         // Navigation
         Row(
@@ -1054,8 +1377,24 @@ private fun GameDayTab(
         HorizontalDivider()
 
         if (uiState.gamesForCurrentDay.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Keine Spiele fuer diesen Spieltag", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (uiState.playoffRounds.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "Keine Spiele für diesen Spieltag",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) {
+                    items(uiState.playoffRounds[uiState.currentRoundIndex].series, key = { it.games }) { game ->
+                        GameCard(game.games.first(), onGameClick)
+                    }
+                }
+
             }
         } else {
             LazyColumn(
@@ -1073,12 +1412,12 @@ private fun GameDayTab(
 // -- Game Card (mit Drittelergebnissen + n.V./n.PS.) --------------------------
 
 @Composable
-private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
+private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}, title: String = "") {
     val dateDisplay = remember(game.date) {
         parseDate(game.date)?.format(deDotDateFmt) ?: game.date
     }
     val hasResult = game.homeGoals != null && game.guestGoals != null
-    val isLive = game.gameStatus?.lowercase() in listOf("live", "1", "2", "3")
+    val isLive = isLive(game)
     val gameId = game.resolvedGameId
 
     Card(
@@ -1093,6 +1432,20 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
         ),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            val seriesTitle = game.seriesTitle?: ""
+            if (title.isNotEmpty() && seriesTitle.isNotEmpty() && title != seriesTitle) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = seriesTitle,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1159,6 +1512,7 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
                                 if (postfix.isNotEmpty()) " $postfix" else "",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
+                            color = if (isLive) { MaterialTheme.colorScheme.error } else MaterialTheme.colorScheme.onSurface
                         )
                         // Drittelergebnisse
                         val periods = periodScoresText(game)
@@ -1171,7 +1525,7 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
                         }
                     } else {
                         Text(
-                            text = "–",
+                            text = "- : -",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1202,10 +1556,42 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}) {
     }
 }
 
+@Composable
+private fun isLive(game: ScheduledGame): Boolean =
+    game.gameStatus?.lowercase() in listOf("live", "1", "2", "3")
+
 // -- Tabelle-Tab --------------------------------------------------------------
 
+enum class TableType { TOTAL, HOME, AWAY }
+
 @Composable
-private fun TableTab(table: List<TableEntry>) {
+fun TableTab(
+    uiState: LeagueDetailUiState,
+    onTeamClick: (teamId: Int, leagueId: Int) -> Unit,
+    leagueId: Int,
+    onTableTypeChange: (TableType) -> Unit
+) {
+
+    val types = listOf("Gesamt", "Heim", "Auswärts")
+
+    TabRow(selectedTabIndex = uiState.selectedTableType.ordinal) {
+        types.forEachIndexed { index, title ->
+            Tab(
+                selected = uiState.selectedTableType.ordinal == index,
+                onClick = {
+                    onTableTypeChange(TableType.entries[index])
+                },
+                text = { Text(title) }
+            )
+        }
+    }
+
+    val table = when (uiState.selectedTableType) {
+        TableType.TOTAL -> uiState.table
+        TableType.HOME -> buildTable(uiState.allGames, TableType.HOME)
+        TableType.AWAY -> buildTable(uiState.allGames, TableType.AWAY)
+    }
+
     if (table.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Keine Tabellendaten vorhanden", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1214,7 +1600,6 @@ private fun TableTab(table: List<TableEntry>) {
     }
 
     val hScroll = rememberScrollState()
-    val surfaceColor = MaterialTheme.colorScheme.surface
 
     Column(
         modifier = Modifier
@@ -1280,10 +1665,17 @@ private fun TableTab(table: List<TableEntry>) {
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .horizontalScroll(hScroll),
+                        .horizontalScroll(hScroll)
+                        .then(Modifier.clickable { onTeamClick(entry.teamId, leagueId) }),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TableCell(entry.teamName, 130.dp, textAlign = TextAlign.Start, fontWeight = FontWeight.Medium, maxLines = 1)
+                    TableCell(
+                        entry.teamName,
+                        130.dp,
+                        textAlign = TextAlign.Start,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1
+                    )
                     TableCell("${entry.games}", 30.dp)
                     TableCell("${entry.won}", 26.dp)
                     TableCell("${entry.draw}", 26.dp)
@@ -1291,7 +1683,7 @@ private fun TableTab(table: List<TableEntry>) {
                     TableCell("${entry.wonOt}", 32.dp)
                     TableCell("${entry.lostOt}", 32.dp)
                     TableCell("${entry.goalsScored}:${entry.goalsReceived}", 60.dp)
-                    TableCell(diffText, 40.dp, color = diffColor, fontWeight = FontWeight.Medium)
+                    TableCell(diffText, 40.dp, fontWeight = FontWeight.Medium, color = diffColor)
                 }
 
                 // Fixiert rechts: Punkte
@@ -1302,9 +1694,9 @@ private fun TableTab(table: List<TableEntry>) {
 }
 
 @Composable
-private fun RowScope.TableHeader(
+private fun TableHeader(
     text: String,
-    width: androidx.compose.ui.unit.Dp,
+    width: Dp,
     textAlign: TextAlign = TextAlign.Center,
 ) {
     Text(
@@ -1318,12 +1710,12 @@ private fun RowScope.TableHeader(
 }
 
 @Composable
-private fun RowScope.TableCell(
+private fun TableCell(
     text: String,
-    width: androidx.compose.ui.unit.Dp,
+    width: Dp,
     textAlign: TextAlign = TextAlign.Center,
     fontWeight: FontWeight? = null,
-    color: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Unspecified,
+    color: Color = Color.Unspecified,
     maxLines: Int = Int.MAX_VALUE,
 ) {
     Text(
@@ -1336,6 +1728,144 @@ private fun RowScope.TableCell(
         maxLines = maxLines,
     )
 }
+fun buildTable(
+    games: List<ScheduledGame>,
+    type: TableType
+): List<TableEntry> {
+
+    data class MutableStats(
+        val teamName: String,
+        val logo: String?,
+        var games: Int = 0,
+        var won: Int = 0,
+        var draw: Int = 0,
+        var lost: Int = 0,
+        var wonOt: Int = 0,
+        var lostOt: Int = 0,
+        var goalsScored: Int = 0,
+        var goalsReceived: Int = 0,
+        var points: Int = 0,
+    )
+
+    val table = mutableMapOf<String, MutableStats>()
+
+    fun getOrCreate(teamName: String, logo: String?): MutableStats {
+        return table.getOrPut(teamName) {
+            MutableStats(teamName, logo)
+        }
+    }
+
+    games
+        .filter { (it.gameNumber ?: 0) > 0 }
+        .filter { it.result != null }
+        .filter {
+            it.homeTeamName.isNotEmpty() && it.guestTeamName.isNotEmpty()
+        }
+        .forEach { game ->
+
+            val result = game.result ?: return@forEach
+            val homeGoals = result.homeGoals
+            val guestGoals = result.guestGoals
+
+            val isOT = result.overtime
+
+            val home = getOrCreate(game.homeTeamName, game.homeTeamLogo)
+            val guest = getOrCreate(game.guestTeamName, game.guestTeamLogo)
+
+            fun handleTeam(
+                stats: MutableStats,
+                goalsFor: Int,
+                goalsAgainst: Int,
+            ) {
+                stats.games++
+                stats.goalsScored += goalsFor
+                stats.goalsReceived += goalsAgainst
+
+                val isWin = goalsFor > goalsAgainst
+                val isDraw = goalsFor == goalsAgainst
+
+                when {
+                    isDraw -> {
+                        stats.draw++
+                        stats.points += 1
+                    }
+
+                    isWin && !isOT -> {
+                        stats.won++
+                        stats.points += 3
+                    }
+
+                    isWin && isOT -> {
+                        stats.wonOt++
+                        stats.points += 2
+                    }
+
+                    !isWin && isOT -> {
+                        stats.lostOt++
+                        stats.points += 1
+                    }
+
+                    else -> {
+                        stats.lost++
+                        // 0 Punkte
+                    }
+                }
+            }
+
+            when (type) {
+                TableType.TOTAL -> {
+                    handleTeam(home, homeGoals, guestGoals)
+                    handleTeam(guest, guestGoals, homeGoals)
+                }
+
+                TableType.HOME -> {
+                    handleTeam(home, homeGoals, guestGoals)
+                }
+
+                TableType.AWAY -> {
+                    handleTeam(guest, guestGoals, homeGoals)
+                }
+            }
+        }
+
+    // Mapping -> TableEntry
+    return table.values
+        .map {
+            TableEntry(
+                position = 0, // wird gleich gesetzt
+                sort = 0,
+                teamName = it.teamName,
+                teamId= 0,
+                teamLogo = it.logo,
+                teamLogoSmall = it.logo,
+                games = it.games,
+                won = it.won,
+                draw = it.draw,
+                lost = it.lost,
+                wonOt = it.wonOt,
+                lostOt = it.lostOt,
+                goalsScored = it.goalsScored,
+                goalsReceived = it.goalsReceived,
+                goalsDiff = it.goalsScored - it.goalsReceived,
+                points = it.points,
+                pointCorrections = null
+            )
+        }
+        .sortedWith(
+            compareByDescending<TableEntry> { it.points }
+                .thenByDescending { it.goalsDiff }
+                .thenByDescending { it.goalsScored }
+        )
+        .sortedWith(
+            compareByDescending<TableEntry> { it.points }
+                .thenByDescending { it.goalsDiff }
+                .thenByDescending { it.goalsScored }
+                .thenBy { it.teamName }
+        )
+        .mapIndexed { index, entry ->
+            entry.copy(position = index + 1)
+        }
+}
 
 // -- Scorer-Tab ---------------------------------------------------------------
 
@@ -1343,13 +1873,36 @@ private enum class ScorerMode { SCORER, STRAFEN, GEMISCHT }
 private enum class StrafenSort { MS, MS_T, P10, P2_2, P2 }
 
 @Composable
-private fun ScorerTab(scorers: List<ScorerEntry>) {
+private fun ScorerTab(scorers: List<ScorerEntry>, table: List<TableEntry>) {
     if (scorers.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Keine Scorerdaten vorhanden", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         return
     }
+
+    // Spaltenbreiten
+    val W_POS = 28.dp
+    val W_SP = 28.dp
+    val W_G = 28.dp
+    val W_A = 28.dp
+    val W_PTS = 30.dp
+    val W_P2 = 28.dp
+    val W_P22 = 32.dp
+    val W_P10 = 28.dp
+    val W_MS = 28.dp
+    val W_MST = 34.dp
+
+    // Mindestbreite für den Namensteil, damit es nicht zu schmal wird
+    val MIN_NAME_WIDTH = 180.dp
+
+    // Wie breit darf der numerische Sichtbereich max. sein (Rest wird gescrollt)?
+    val screenW = LocalConfiguration.current.screenWidthDp.dp
+    // In Scorer-Mode reichen meist ~50–55%, in Strafen/Gemischt etwas mehr
+    val numericViewportFraction = remember { 0.5f }
+    val numericViewport = screenW * numericViewportFraction
+
+    val teamLogoMap = remember(table) { table.associate { it.teamId to it.teamLogo } }
 
     var mode by remember { mutableStateOf(ScorerMode.SCORER) }
     var strafenSort by remember { mutableStateOf(StrafenSort.MS) }
@@ -1380,7 +1933,7 @@ private fun ScorerTab(scorers: List<ScorerEntry>) {
             }
         }
 
-        // Sekundärsortierung immer nach Schwere: MS > MS-T > 10' > 2+2 > 2'
+        // Sekundärsortierung
         val strafenComparator = remember(strafenSort) {
             when (strafenSort) {
                 StrafenSort.MS -> compareByDescending<ScorerEntry> { it.penaltyMsFull }
@@ -1418,135 +1971,123 @@ private fun ScorerTab(scorers: List<ScorerEntry>) {
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 4.dp),
         ) {
+            // Header
             item {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(if (needsHScroll) Modifier.horizontalScroll(hScroll) else Modifier)
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                        .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (needsHScroll) {
-                        ScorerHeader("#", 28.dp)
-                        ScorerHeader("Spieler / Team", 140.dp, TextAlign.Start)
-                        ScorerHeader("Sp", 30.dp)
-                    } else {
-                        ScorerHeader("#", 28.dp)
-                        // Spieler/Team fills remaining space in scorer mode
-                        Box(modifier = Modifier.weight(1f)) {
-                            ScorerHeader("Spieler / Team", null, TextAlign.Start)
+                    ScorerHeader("#", W_POS)
+
+                    // Spieler / Team: bekommt den restlichen Platz (gewichtetes Kind)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .widthIn(min = MIN_NAME_WIDTH),
+                    ) {
+                        ScorerHeader("Spieler / Team", null, TextAlign.Start)
+                    }
+
+                    // Numerischer Block: Maximalbreite begrenzen, Rest scrollt
+                    Row(
+                        modifier = Modifier
+                            .widthIn(max = numericViewport)
+                            .then(if (needsHScroll) Modifier.horizontalScroll(hScroll) else Modifier)
+                            .padding(horizontal = 16.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ScorerHeader("Sp", W_SP)
+                        if (mode != ScorerMode.STRAFEN) {
+                            ScorerHeader("T", W_G)
+                            ScorerHeader("V", W_A)
+                            ScorerHeader("Pkt", W_PTS)
                         }
-                        ScorerHeader("Sp", 34.dp)
-                    }
-                    if (mode != ScorerMode.STRAFEN) {
-                        ScorerHeader("T", 28.dp)
-                        ScorerHeader("V", 28.dp)
-                        ScorerHeader("Pkt", 34.dp)
-                    }
-                    if (mode != ScorerMode.SCORER) {
-                        val sortActive = mode == ScorerMode.STRAFEN
-                        SortableScorerHeader("2'", 28.dp, sortActive && strafenSort == StrafenSort.P2) { strafenSort = StrafenSort.P2 }
-                        SortableScorerHeader("2+2", 32.dp, sortActive && strafenSort == StrafenSort.P2_2) { strafenSort = StrafenSort.P2_2 }
-                        SortableScorerHeader("10'", 30.dp, sortActive && strafenSort == StrafenSort.P10) { strafenSort = StrafenSort.P10 }
-                        SortableScorerHeader("MS", 28.dp, sortActive && strafenSort == StrafenSort.MS) { strafenSort = StrafenSort.MS }
-                        SortableScorerHeader("MS-T", 34.dp, sortActive && strafenSort == StrafenSort.MS_T) { strafenSort = StrafenSort.MS_T }
+                        if (mode != ScorerMode.SCORER) {
+                            val sortActive = mode == ScorerMode.STRAFEN
+                            SortableScorerHeader("2'", W_P2, sortActive && strafenSort == StrafenSort.P2) { strafenSort = StrafenSort.P2 }
+                            SortableScorerHeader("2+2", W_P22, sortActive && strafenSort == StrafenSort.P2_2) { strafenSort = StrafenSort.P2_2 }
+                            SortableScorerHeader("10'", W_P10, sortActive && strafenSort == StrafenSort.P10) { strafenSort = StrafenSort.P10 }
+                            SortableScorerHeader("MS", W_MS, sortActive && strafenSort == StrafenSort.MS) { strafenSort = StrafenSort.MS }
+                            SortableScorerHeader("MS-T", W_MST, sortActive && strafenSort == StrafenSort.MS_T) { strafenSort = StrafenSort.MS_T }
+                        }
                     }
                 }
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             }
+
+            // Items
             itemsIndexed(displayList, key = { _, s -> "${mode.name}-${strafenSort.name}-${s.playerId}" }) { index, scorer ->
                 val displayPos = if (mode == ScorerMode.STRAFEN) index + 1 else scorer.position
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(if (needsHScroll) Modifier.horizontalScroll(hScroll) else Modifier)
-                        .padding(horizontal = 16.dp, vertical = 5.dp),
+                        .padding(vertical = 5.dp, horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (needsHScroll) {
-                        Text(
-                            "$displayPos",
-                            Modifier.width(28.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Column(modifier = Modifier.width(140.dp)) {
+                    Text(
+                        "$displayPos",
+                        Modifier.width(W_POS),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.Bold,
+                    )
+
+                    // Spieler / Team: füllt Rest, min. Breite sichern
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .widthIn(min = MIN_NAME_WIDTH),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TeamLogo(teamLogoMap[scorer.teamId], scorer.teamName, size = 20.dp)
+                        Spacer(Modifier.width(4.dp))
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 "${scorer.firstName} ${scorer.lastName}",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.Medium,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 scorer.teamName,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
-                        Text("${scorer.games}", Modifier.width(30.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                    } else {
-                        Text(
-                            "$displayPos",
-                            Modifier.width(28.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "${scorer.firstName} ${scorer.lastName}",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                            )
-                            Text(
-                                scorer.teamName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
+                    }
+
+                    // Numerischer Block: gleiche Maximalbreite + Scroll wie im Header
+                    Row(
+                        modifier = Modifier
+                            .widthIn(max = numericViewport)
+                            .then(if (needsHScroll) Modifier.horizontalScroll(hScroll) else Modifier)
+                            .padding(horizontal = 16.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("${scorer.games}", Modifier.width(W_SP), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+
+                        if (mode != ScorerMode.STRAFEN) {
+                            Text("${scorer.goals}", Modifier.width(W_G), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                            Text("${scorer.assists}", Modifier.width(W_A), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                            Text("${scorer.goals + scorer.assists}", Modifier.width(W_PTS), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, fontWeight = FontWeight.Bold)
                         }
-                        Text("${scorer.games}", Modifier.width(34.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                    }
-                    if (mode != ScorerMode.STRAFEN) {
-                        Text(
-                            "${scorer.goals}",
-                            Modifier.width(28.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text("${scorer.assists}", Modifier.width(28.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                        Text(
-                            "${scorer.goals + scorer.assists}",
-                            Modifier.width(34.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    if (mode != ScorerMode.SCORER) {
-                        Text("${scorer.penalty2}", Modifier.width(28.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                        Text("${scorer.penalty2and2}", Modifier.width(32.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                        Text("${scorer.penalty10}", Modifier.width(30.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                        Text(
-                            "${scorer.penaltyMsFull}",
-                            Modifier.width(28.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            color = if (scorer.penaltyMsFull > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                            fontWeight = if (scorer.penaltyMsFull > 0) FontWeight.Bold else null,
-                        )
-                        Text(
-                            "${scorer.penaltyMsTech}",
-                            Modifier.width(34.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            color = if (scorer.penaltyMsTech > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                        )
+                        if (mode != ScorerMode.SCORER) {
+                            Text("${scorer.penalty2}", Modifier.width(W_P2), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                            Text("${scorer.penalty2and2}", Modifier.width(W_P22), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                            Text("${scorer.penalty10}", Modifier.width(W_P10), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                            Text("${scorer.penaltyMsFull}", Modifier.width(W_MS), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
+                                color = if (scorer.penaltyMsFull > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (scorer.penaltyMsFull > 0) FontWeight.Bold else null)
+                            Text("${scorer.penaltyMsTech}", Modifier.width(W_MST), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
+                                color = if (scorer.penaltyMsTech > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                        }
                     }
                 }
             }

@@ -1,11 +1,25 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(ExperimentalLayoutApi::class)
 
 package de.floorballcompanion.ui.team
 
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -13,17 +27,38 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Star
-import de.floorballcompanion.LocalOriginTabIcon
 import androidx.compose.material.icons.outlined.StarBorder
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -31,13 +66,16 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import de.floorballcompanion.LocalOriginTabIcon
 import de.floorballcompanion.data.local.entity.FavoriteEntity
 import de.floorballcompanion.data.remote.model.ScheduledGame
 import de.floorballcompanion.data.remote.model.ScorerEntry
 import de.floorballcompanion.data.remote.model.TableEntry
 import de.floorballcompanion.data.repository.FloorballRepository
+import de.floorballcompanion.domain.LeagueGroupingService
 import de.floorballcompanion.domain.TeamAggregationService
 import de.floorballcompanion.domain.TeamLeagueData
+import de.floorballcompanion.domain.model.LeaguePhase
 import de.floorballcompanion.ui.components.TeamLogo
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -146,6 +184,7 @@ data class TeamDetailUiState(
 @HiltViewModel
 class TeamDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
+    private val groupingService: LeagueGroupingService,
     private val repository: FloorballRepository,
     private val aggregationService: TeamAggregationService,
 ) : ViewModel() {
@@ -170,19 +209,21 @@ class TeamDetailViewModel @Inject constructor(
             try {
                 val detailDeferred = async { repository.getLeagueDetail(leagueId) }
                 val scheduleDeferred = async { repository.getSchedule(leagueId) }
+                val detail = detailDeferred.await()
                 val tableDeferred = async {
-                    try { repository.refreshTable(leagueId) } catch (_: Exception) { emptyList() }
+                    try { repository.refreshTableWithClubDiscovery(leagueId, detail.name, detail.gameOperationName) } catch (_: Exception) { emptyList() }
                 }
                 val scorerDeferred = async { repository.getScorer(leagueId) }
 
-                val detail = detailDeferred.await()
                 val schedule = scheduleDeferred.await()
                 val table = tableDeferred.await()
                 val allScorers = scorerDeferred.await()
+                val tableEntry = table.find { it.teamId == teamId }
+                val teamName = tableEntry?.teamName?: ""
 
                 // Filter schedule for this team
                 val teamGames = schedule.filter {
-                    it.homeTeamId == teamId || it.guestTeamId == teamId
+                    it.homeTeamName == teamName || it.guestTeamName == teamName
                 }
 
                 val today = LocalDate.now()
@@ -194,12 +235,6 @@ class TeamDetailViewModel @Inject constructor(
                     game.result == null && (parseDate(game.date)?.let { !it.isBefore(today) } != false)
                 }.sortedBy { it.date }
 
-                // Get team info from table or first game
-                val tableEntry = table.find { it.teamId == teamId }
-                val teamName = tableEntry?.teamName
-                    ?: teamGames.firstOrNull()?.let {
-                        if (it.homeTeamId == teamId) it.homeTeamName else it.guestTeamName
-                    } ?: ""
                 val teamLogo = tableEntry?.teamLogo
                     ?: teamGames.firstOrNull()?.let {
                         if (it.homeTeamId == teamId) it.homeTeamLogo else it.guestTeamLogo
@@ -208,11 +243,12 @@ class TeamDetailViewModel @Inject constructor(
                 // Filter scorers for this team
                 val teamScorers = allScorers.filter { it.teamId == teamId }
 
-                val isLeague = detail.leagueModus != "cup"
+                val isLeague = detail.leagueModus != "cup" && groupingService.detectPhase(detail.name).first == LeaguePhase.REGULAR
 
                 // Check if we already have cached cross-league data
                 val cached = repository.getLeaguesForTeam(teamId)
                 val hasExistingData = cached.size > 1
+                val additionalLeagues = aggregationService.getLeaguesForTeam(teamId, teamName, leagueId)
 
                 _uiState.update {
                     it.copy(
@@ -226,16 +262,13 @@ class TeamDetailViewModel @Inject constructor(
                         table = table,
                         teamPosition = tableEntry?.position,
                         isLeagueModus = isLeague,
+                        additionalLeagues = additionalLeagues,
                         scorers = teamScorers,
                         hasSearchedMoreLeagues = hasExistingData,
                         isLoading = false,
                     )
                 }
 
-                // If cached data exists, load it automatically
-                if (hasExistingData) {
-                    loadCachedCrossLeagueData()
-                }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, error = e.message ?: "Fehler beim Laden")
@@ -244,27 +277,14 @@ class TeamDetailViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadCachedCrossLeagueData() {
-        try {
-            val results = aggregationService.discoverLeaguesForTeam(teamId, leagueId)
-            _uiState.update {
-                it.copy(
-                    additionalLeagues = results,
-                    hasSearchedMoreLeagues = true,
-                )
-            }
-        } catch (_: Exception) {
-            // Silently fail for cached data loading
-        }
-    }
-
-    fun searchMoreLeagues() {
+    fun searchMoreLeagues(teamName: String) {
         if (_uiState.value.isSearchingMoreLeagues) return
         viewModelScope.launch {
             _uiState.update { it.copy(isSearchingMoreLeagues = true, searchProgress = "Lade alle Ligen...", searchError = null) }
             try {
                 val results = aggregationService.discoverLeaguesForTeam(
                     teamId = teamId,
+                    teamName = teamName,
                     knownLeagueId = leagueId,
                     onProgress = { current, total ->
                         _uiState.update { it.copy(searchProgress = "Prüfe $current von $total Ligen...") }
@@ -279,6 +299,7 @@ class TeamDetailViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
+                Log.d("TeamScreen", "Error: " + e.message + "\n" + e.printStackTrace())
                 _uiState.update {
                     it.copy(
                         isSearchingMoreLeagues = false,
@@ -480,7 +501,7 @@ private fun TeamContent(
                     title = "Nächstes Spiel",
                     primaryGame = allUpcoming.first(),
                     allGames = allUpcoming,
-                    teamId = uiState.teamId,
+                    teamName = uiState.teamName,
                     onGameClick = onGameClick,
                 )
             }
@@ -493,7 +514,7 @@ private fun TeamContent(
                     title = "Zuletzt gespielt",
                     primaryGame = allPast.first(),
                     allGames = allPast,
-                    teamId = uiState.teamId,
+                    teamName = uiState.teamName,
                     onGameClick = onGameClick,
                 )
             }
@@ -539,7 +560,7 @@ private fun TeamContent(
         if (!uiState.hasSearchedMoreLeagues && !uiState.isSearchingMoreLeagues) {
             item(key = "search-more") {
                 OutlinedButton(
-                    onClick = { viewModel.searchMoreLeagues() },
+                    onClick = { viewModel.searchMoreLeagues(uiState.teamName) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -599,11 +620,11 @@ private fun TeamContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(4.dp))
-                    androidx.compose.foundation.layout.FlowRow(
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         uiState.additionalLeagues.forEach { league ->
-                            androidx.compose.material3.AssistChip(
+                            AssistChip(
                                 onClick = { onLeagueClick(league.leagueId) },
                                 label = {
                                     Text(
@@ -755,7 +776,7 @@ private fun ExpandableGameSectionWithLeague(
     title: String,
     primaryGame: Pair<String, ScheduledGame>,
     allGames: List<Pair<String, ScheduledGame>>,
-    teamId: Int,
+    teamName: String,
     onGameClick: (Int) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -781,7 +802,7 @@ private fun ExpandableGameSectionWithLeague(
             // Primary game card
             TeamGameRow(
                 game = primaryGame.second,
-                teamId = teamId,
+                teamName = teamName,
                 leagueName = primaryGame.first,
                 onGameClick = onGameClick,
             )
@@ -817,7 +838,7 @@ private fun ExpandableGameSectionWithLeague(
                         remainingGames.forEach { (leagueName, game) ->
                             TeamGameRow(
                                 game = game,
-                                teamId = teamId,
+                                teamName = teamName,
                                 leagueName = leagueName,
                                 onGameClick = onGameClick,
                             )
@@ -835,11 +856,11 @@ private fun ExpandableGameSectionWithLeague(
 @Composable
 private fun TeamGameRow(
     game: ScheduledGame,
-    teamId: Int,
+    teamName: String,
     leagueName: String,
     onGameClick: (Int) -> Unit,
 ) {
-    val isHome = game.homeTeamId == teamId
+    val isHome = game.homeTeamName == teamName
     val opponentName = if (isHome) game.guestTeamName else game.homeTeamName
     val opponentLogo = if (isHome) game.guestTeamLogo else game.homeTeamLogo
     val prefix = if (isHome) "vs." else "@"
@@ -885,7 +906,7 @@ private fun TeamGameRow(
             val isWin = teamGoals > opponentGoals
             val isDraw = teamGoals == opponentGoals
             val resultColor = when {
-                isWin -> MaterialTheme.colorScheme.primary
+                isWin -> TeamFavoriteColor
                 isDraw -> MaterialTheme.colorScheme.onSurfaceVariant
                 else -> MaterialTheme.colorScheme.error
             }
@@ -996,7 +1017,9 @@ private fun MiniTableCard(
                             entry = entry.tableEntry,
                             isHighlighted = isCurrentTeam,
                             onClick = {
-                                onTeamClick(entry.tableEntry.teamId, leagueId)
+                                if (!isCurrentTeam) {
+                                    onTeamClick(entry.tableEntry.teamId, leagueId)
+                                }
                             },
                         )
                     }
@@ -1188,8 +1211,8 @@ private fun SortableHeader(
     text: String,
     width: Dp,
     isActive: Boolean,
-    activeColor: androidx.compose.ui.graphics.Color,
-    inactiveColor: androidx.compose.ui.graphics.Color,
+    activeColor: Color,
+    inactiveColor: Color,
     style: androidx.compose.ui.text.TextStyle,
     onClick: () -> Unit,
 ) {
@@ -1223,20 +1246,13 @@ private fun ScorerRow(scorer: ScorerEntry, showPenalties: Boolean = false) {
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                "${scorer.firstName} ${scorer.lastName}",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-            )
-            Text(
-                scorer.teamName,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
+        Text(
+            "${scorer.firstName} ${scorer.lastName}",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.weight(1f)
+        )
         if (showPenalties) {
             Text("${scorer.penalty2}", Modifier.width(28.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
             Text("${scorer.penalty2and2}", Modifier.width(32.dp), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)

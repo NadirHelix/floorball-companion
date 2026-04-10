@@ -2,11 +2,21 @@ package de.floorballcompanion.ui.game
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -16,25 +26,49 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
-import de.floorballcompanion.LocalOriginTabIcon
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import de.floorballcompanion.LocalOriginTabIcon
 import de.floorballcompanion.R
-import de.floorballcompanion.data.remote.model.*
+import de.floorballcompanion.data.remote.model.GameDetail
+import de.floorballcompanion.data.remote.model.GameEvent
+import de.floorballcompanion.data.remote.model.GameResult
 import de.floorballcompanion.data.repository.FloorballRepository
 import de.floorballcompanion.ui.components.TeamLogo
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +79,7 @@ import retrofit2.HttpException
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
+import androidx.core.net.toUri
 
 // ── UI State ─────────────────────────────────────────────────
 
@@ -123,10 +158,10 @@ fun GameDetailScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            painter = androidx.compose.ui.res.painterResource(R.drawable.placeholder_logo),
+                            painter = painterResource(R.drawable.placeholder_logo),
                             contentDescription = null,
                             modifier = Modifier.size(28.dp),
-                            tint = androidx.compose.ui.graphics.Color.Unspecified,
+                            tint = Color.Unspecified,
                         )
                         Spacer(Modifier.width(8.dp))
                         val game = uiState.game
@@ -233,7 +268,7 @@ private fun GameContent(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _,
 
 @Composable
 private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _, _ -> }) {
-    val isLive = game.gameStatus.lowercase() in listOf("live", "1", "2", "3")
+    val isLive = game.gameStatus?.lowercase() in listOf("live", "1", "2", "3")
 
     Surface(
         color = if (isLive) MaterialTheme.colorScheme.errorContainer
@@ -344,7 +379,7 @@ private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _,
                         )
                     } else {
                         Text(
-                            "–",
+                            "- : -",
                             style = MaterialTheme.typography.headlineLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -574,20 +609,29 @@ private fun EventRow(
     val isHome = event.eventTeam == "home"
     val playerLookup = if (isHome) homePlayers else guestPlayers
 
-    val icon: String
-    val primaryColor: androidx.compose.ui.graphics.Color
+    val iconRes: Int
+    val iconContentDesc: String
+    val primaryColor: Color
     val primaryText: String
     val secondaryText: String?
 
     when (event.eventType) {
         "goal" -> {
-            icon = "\u26BD"  // ⚽
+            val goalType = event.goalType?.lowercase()?:""
+            iconRes = when (goalType) {
+                "penalty_shot" -> R.drawable.ic_goal_ps
+                "owngoal" -> R.drawable.ic_goal_og
+                else -> R.drawable.ic_goal
+            }
+
+            iconContentDesc = "Tor"
             primaryColor = MaterialTheme.colorScheme.primary
             val scorerName = event.number?.let { playerLookup[it] } ?: ""
             val scorerNum = event.number?.let { "#$it" } ?: ""
             primaryText = buildString {
-                append(scorerNum)
+                if (scorerNum != "#1000") append(scorerNum)
                 if (scorerName.isNotEmpty()) append(" $scorerName")
+                if (goalType == "owngoal") append(event.goalTypeString?: "Eigentor")
             }
             secondaryText = buildString {
                 event.assist?.let { assistNum ->
@@ -598,7 +642,7 @@ private fun EventRow(
                     }
                 }
                 event.goalTypeString?.let { gts ->
-                    if (gts != "Tor") {
+                    if (gts != "Tor" && goalType != "owngoal") {
                         if (isNotEmpty()) append(" · ")
                         append(gts)
                     }
@@ -606,9 +650,16 @@ private fun EventRow(
             }.ifEmpty { null }
         }
         "penalty" -> {
-            val isMspenalty = event.penaltyType?.lowercase()?.startsWith("ms") == true ||
-                event.penaltyTypeString?.lowercase()?.let { it.startsWith("ms") || it == "matchstrafe" } == true
-            icon = if (isMspenalty) "\uD83D\uDFE5" else "\uD83D\uDFE8"  // 🟥 or 🟨
+            val penaltyType = event.penaltyType?.lowercase()?:""
+            iconRes = when (penaltyType) {
+                "penalty_ms_tech" -> R.drawable.ic_penalty_ms_t
+                "penalty_ms_full" -> R.drawable.ic_penalty_ms
+                "penalty_2" -> R.drawable.ic_penalty_2
+                "penalty_2and2" -> R.drawable.ic_penalty_2plus2
+                "penalty_10" -> R.drawable.ic_penalty_10
+                else -> R.drawable.outline_adjust_24
+            }
+            iconContentDesc = event.penaltyTypeString?:"Strafe"
             primaryColor = MaterialTheme.colorScheme.error
             val playerName = event.number?.let { playerLookup[it] } ?: ""
             val playerNum = event.number?.let { "#$it" } ?: ""
@@ -620,13 +671,15 @@ private fun EventRow(
             secondaryText = event.penaltyReasonString
         }
         "timeout" -> {
-            icon = "\u23F1"  // ⏱
+            iconRes = R.drawable.ic_timeout
+            iconContentDesc = "Auszeit"
             primaryColor = MaterialTheme.colorScheme.onSurfaceVariant
             primaryText = "Auszeit"
             secondaryText = null
         }
         else -> {
-            icon = "\u2022"  // •
+            iconRes = R.drawable.outline_adjust_24
+            iconContentDesc = ""
             primaryColor = MaterialTheme.colorScheme.onSurfaceVariant
             primaryText = event.eventType
             secondaryText = null
@@ -668,7 +721,12 @@ private fun EventRow(
                         }
                     }
                     Spacer(Modifier.width(6.dp))
-                    Text(icon, fontSize = 14.sp)
+                    Icon(
+                        painter = painterResource(iconRes),
+                        contentDescription = iconContentDesc,
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(18.dp)      // 16–20 dp passt meist gut
+                    )
                 }
             }
 
@@ -724,7 +782,12 @@ private fun EventRow(
                 horizontalAlignment = Alignment.Start,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(icon, fontSize = 14.sp)
+                    Icon(
+                        painter = painterResource(iconRes),
+                        contentDescription = iconContentDesc,
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Spacer(Modifier.width(6.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -1002,7 +1065,7 @@ private fun GameInfoDialog(game: GameDetail, onDismiss: () -> Unit) {
             game.arenaShort?.let { InfoRow("Halle", it) }
             game.arenaAddress?.let { address ->
                 InfoRowClickable("Adresse", address) {
-                    val mapUri = Uri.parse("geo:0,0?q=${Uri.encode(address)}")
+                    val mapUri = "geo:0,0?q=${Uri.encode(address)}".toUri()
                     context.startActivity(Intent(Intent.ACTION_VIEW, mapUri))
                 }
             }
@@ -1010,12 +1073,12 @@ private fun GameInfoDialog(game: GameDetail, onDismiss: () -> Unit) {
             game.audience?.let { InfoRow("Zuschauer", "$it") }
             game.liveStreamLink?.let { link ->
                 InfoRowClickable("Livestream", link) {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+                    context.startActivity(Intent(Intent.ACTION_VIEW, link.toUri()))
                 }
             }
             game.vodLink?.let { link ->
                 InfoRowClickable("VOD", link) {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+                    context.startActivity(Intent(Intent.ACTION_VIEW, link.toUri()))
                 }
             }
         }

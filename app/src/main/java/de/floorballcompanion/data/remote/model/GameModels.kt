@@ -29,7 +29,7 @@ data class GameDetail(
     val date: String,
     @SerialName("start_time") val startTime: String,
     @SerialName("actual_start_time") val actualStartTime: String? = null,
-    @SerialName("game_status") val gameStatus: String,
+    @SerialName("game_status") val gameStatus: String? = "UNKNOWN",
     @SerialName("ingame_status") val ingameStatus: String? = null,
     val audience: Int? = null,
     @SerialName("live_stream_link") val liveStreamLink: String? = null,

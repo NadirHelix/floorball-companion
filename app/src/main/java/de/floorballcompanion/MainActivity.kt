@@ -1,20 +1,20 @@
 package de.floorballcompanion
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -68,6 +68,7 @@ val bottomNavItems = listOf(Screen.Dashboard, Screen.Browse, Screen.Clubs)
 
 val LocalOriginTabIcon = compositionLocalOf<ImageVector> { Icons.Default.Home }
 
+@SuppressLint("RestrictedApi")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainApp() {
@@ -92,7 +93,7 @@ fun MainApp() {
     } else null
     val originIcon = remember(originRoute) {
         when (originRoute) {
-            Screen.Browse.route -> Icons.Default.Search
+            Screen.Browse.route -> Icons.Default.EmojiEvents
             Screen.Clubs.route -> Icons.Default.Groups
             else -> Icons.Default.Home
         }
@@ -151,7 +152,7 @@ fun MainApp() {
                                 Icon(
                                     imageVector = when (screen) {
                                         Screen.Dashboard -> Icons.Default.Home
-                                        Screen.Browse -> Icons.Default.Search
+                                        Screen.Browse -> Icons.Default.EmojiEvents
                                         Screen.Clubs -> Icons.Default.Groups
                                     },
                                     contentDescription = screen.label,
@@ -174,6 +175,9 @@ fun MainApp() {
                 DashboardScreen(
                     onTeamClick = { teamId, leagueId ->
                         navController.navigate("team_detail/$teamId/$leagueId")
+                    },
+                    onGameClick = { gameId ->
+                        navController.navigate("game_detail/$gameId")
                     },
                     onLeagueClick = { leagueId ->
                         navController.navigate("league_detail/$leagueId")
@@ -206,7 +210,7 @@ fun MainApp() {
                     },
                     onTeamClick = { teamId, leagueId ->
                         navController.navigate("team_detail/$teamId/$leagueId")
-                    },
+                    }
                 )
             }
             composable(

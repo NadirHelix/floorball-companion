@@ -2,12 +2,7 @@
 .gradle
 /local.properties
 /.idea
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+/.kotlin
 .DS_Store
 /build
 /captures
@@ -16,3 +11,4 @@
 local.properties
 /.*/settings.local.json
 /internal
+/app/release
