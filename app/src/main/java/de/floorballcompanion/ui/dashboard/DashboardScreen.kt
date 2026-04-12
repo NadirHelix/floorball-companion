@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -31,6 +32,7 @@ import de.floorballcompanion.data.remote.model.TableEntry
 import de.floorballcompanion.data.repository.FloorballRepository
 import de.floorballcompanion.ui.components.TeamLogo
 import de.floorballcompanion.ui.team.TeamFavoriteColor
+import de.floorballcompanion.worker.LiveScoreWorker
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
@@ -42,6 +44,13 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import javax.inject.Inject
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationManagerCompat
+import de.floorballcompanion.util.isLiveStatus
 
 // ── Data classes ──────────────────────────────────────────────
 
@@ -64,7 +73,23 @@ data class LeagueCardState(
     val isLoading: Boolean = true,
     val error: String? = null,
 ) {
-    val hasLiveGame: Boolean get() = currentGameDay.any { it.gameStatus == "live" }
+    val hasLiveGame: Boolean get() = currentGameDay.any { it.gameStatus.isLiveStatus() }
+}
+
+@Composable
+private fun EnsureNotificationPermissionIfNeeded() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { // optional
+        }
+
+    val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val enabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    LaunchedEffect(Unit) {
+        if (!granted && enabled) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
 }
 
 // ── ViewModel ─────────────────────────────────────────────────
@@ -281,6 +306,7 @@ fun DashboardScreen(
     onLeagueClick: (leagueId: Int) -> Unit = {},
     viewModel: DashboardViewModel = hiltViewModel(),
 ) {
+    EnsureNotificationPermissionIfNeeded()
     val teamCards by viewModel.teamCards.collectAsState()
     val leagueCards by viewModel.leagueCards.collectAsState()
     val leagueTabSelection by viewModel.leagueTabSelection.collectAsState()
@@ -292,6 +318,17 @@ fun DashboardScreen(
 
     val hasFavorites = favoriteTeams.isNotEmpty() || favoriteLeagues.isNotEmpty()
     val anyLive = leagueCards.any { it.hasLiveGame }
+    val context = LocalContext.current
+
+    LaunchedEffect(anyLive) {
+        if (anyLive) {
+            LiveScoreWorker.enqueueOneTimeWork(context)
+        }
+    }
+
+    val liveGames = remember(leagueCards) {
+        leagueCards.flatMap { it.currentGameDay }.filter { it.gameStatus.isLiveStatus() }
+    }
 
     if (!hasFavorites) {
         Box(
@@ -352,7 +389,26 @@ fun DashboardScreen(
                     }
                 }
             }
-
+            if (liveGames.isNotEmpty()) {
+                item(key = "live_overlay") {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        tonalElevation = 2.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                    ) {
+                        Column(Modifier.padding(8.dp)) {
+                            Text("Live jetzt", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(4.dp))
+                            liveGames.take(2).forEach { game ->
+                                GameDayRow(game, onGameClick, true)
+                                Spacer(Modifier.height(4.dp))
+                            }
+                        }
+                    }
+                }
+            }
             itemsIndexed(teamCards, key = { _, s -> "team_${s.favorite.externalId}" }) { _, state ->
                 TeamDashCard(
                     state = state,
@@ -740,7 +796,7 @@ private fun LeagueDashCard(
 
                 when (selectedTab) {
                     0 -> LeagueGameDayTab(state, onGameClick)
-                    1 -> LeagueTableTab(state)
+                    1 -> if (state.table.isEmpty()) LeagueScorerTab(state) else LeagueTableTab(state)
                     2 -> LeagueScorerTab(state)
                 }
             }
@@ -774,8 +830,9 @@ private fun LeagueGameDayTab(state: LeagueCardState,
 
 @Composable
 private fun GameDayRow(game: ScheduledGame,
-                       onGameClick: (gameId: Int) -> Unit = {},) {
-    val isLive = game.gameStatus == "live"
+                       onGameClick: (gameId: Int) -> Unit = {},
+                       isLiveSection: Boolean = false) {
+    val isLive = game.gameStatus.isLiveStatus()
     val gameId = game.gameId?: 0
     Row(
         modifier = Modifier.fillMaxWidth()
@@ -805,7 +862,7 @@ private fun GameDayRow(game: ScheduledGame,
             TeamLogo(game.homeTeamLogo, game.homeTeamName, size = 16.dp)
         }
         Spacer(Modifier.width(4.dp))
-        if (isLive) {
+        if (isLive && !isLiveSection) {
             Text(
                 "LIVE",
                 style = MaterialTheme.typography.labelSmall,

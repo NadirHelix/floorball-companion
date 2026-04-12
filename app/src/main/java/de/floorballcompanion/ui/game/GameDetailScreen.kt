@@ -43,6 +43,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -74,12 +76,19 @@ import de.floorballcompanion.ui.components.TeamLogo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import androidx.core.net.toUri
+import androidx.lifecycle.repeatOnLifecycle
+import de.floorballcompanion.util.isLiveStatus
+import java.time.Duration
+import java.time.LocalDateTime
+import java.time.LocalTime
 
 // ── UI State ─────────────────────────────────────────────────
 
@@ -104,39 +113,40 @@ class GameDetailViewModel @Inject constructor(
     val uiState = _uiState.asStateFlow()
 
     init {
-        loadGame()
+        loadGame(showLoading = true)
     }
 
-    private fun loadGame() {
+    private fun loadGame(showLoading: Boolean) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null, isNotAvailable = false) }
+            if (showLoading) {
+                _uiState.update { it.copy(isLoading = true, error = null, isNotAvailable = false) }
+            }
             try {
                 val game = repository.getGameDetail(gameId)
-                _uiState.update { it.copy(game = game, isLoading = false) }
+                _uiState.update { it.copy(game = game, isLoading = false, error = null, isNotAvailable = false) }
             } catch (e: HttpException) {
                 val code = e.code()
-                if (code in listOf(404, 500)) {
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            error = "Spieldaten noch nicht verfügbar",
-                            isNotAvailable = true,
-                        )
-                    }
-                } else {
-                    _uiState.update {
-                        it.copy(isLoading = false, error = "Fehler beim Laden (HTTP $code)")
+                if (showLoading) {
+                    if (code in listOf(404, 500)) {
+                        _uiState.update {
+                            it.copy(isLoading = false, error = "Spieldaten noch nicht verfügbar", isNotAvailable = true)
+                        }
+                    } else {
+                        _uiState.update { it.copy(isLoading = false, error = "Fehler beim Laden (HTTP $code)") }
                     }
                 }
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(isLoading = false, error = e.message ?: "Fehler beim Laden")
+                if (showLoading) {
+                    _uiState.update { it.copy(isLoading = false, error = e.message ?: "Fehler beim Laden") }
                 }
             }
         }
     }
 
-    fun retry() = loadGame()
+    fun retry() = loadGame(showLoading = true)
+
+    // Für das Polling: ohne Spinner/Fehleranzeige
+    fun refresh() = loadGame(showLoading = false)
 }
 
 // ── Screen ───────────────────────────────────────────────────
@@ -225,6 +235,20 @@ fun GameDetailScreen(
             }
         }
     }
+    val isLive = remember(uiState.game?.gameStatus) {
+        uiState.game?.gameStatus?.isLiveStatus()?: false
+    }
+
+    // Polling: alle 30s refresh, solange Screen sichtbar UND Spiel live
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.LaunchedEffect(isLive, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (isActive && isLive) {
+                viewModel.refresh()
+                delay(30_000)
+            }
+        }
+    }
 
     if (showInfoDialog && uiState.game != null) {
         GameInfoDialog(game = uiState.game!!, onDismiss = { showInfoDialog = false })
@@ -268,7 +292,8 @@ private fun GameContent(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _,
 
 @Composable
 private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _, _ -> }) {
-    val isLive = game.gameStatus?.lowercase() in listOf("live", "1", "2", "3")
+    val isLive = game.gameStatus?.isLiveStatus()?: false
+    val isSoon = isLive && game.ingameStatus == null
 
     Surface(
         color = if (isLive) MaterialTheme.colorScheme.errorContainer
@@ -371,12 +396,33 @@ private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _,
                             )
                         }
                     } else if (isLive) {
-                        Text(
-                            "LIVE",
-                            style = MaterialTheme.typography.headlineLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.error,
-                        )
+                        if (isSoon) {
+                            val targetDateTime = remember(game.date, game.startTime) {
+                                try {
+                                    val date = LocalDate.parse(game.date)
+                                    val time = LocalTime.parse(game.startTime)
+                                    LocalDateTime.of(date, time)
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+
+                            if (targetDateTime != null) {
+                                CountdownTimer(targetDateTime)
+                            } else {
+                                Text("LIVE",
+                                    style = MaterialTheme.typography.headlineLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error,)
+                            }
+                        } else {
+                            Text(
+                                "LIVE",
+                                style = MaterialTheme.typography.headlineLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     } else {
                         Text(
                             "- : -",
@@ -483,6 +529,40 @@ private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _,
             }
         }
     }
+}
+
+@Composable
+fun CountdownTimer(
+    targetDateTime: LocalDateTime,
+    modifier: Modifier = Modifier
+) {
+    var remainingTime by remember { mutableStateOf(Duration.between(LocalDateTime.now(), targetDateTime)) }
+
+    LaunchedEffect(targetDateTime) {
+        while (remainingTime.seconds > 0) {
+            delay(1000)
+            remainingTime = Duration.between(LocalDateTime.now(), targetDateTime)
+        }
+    }
+
+    val totalSeconds = remainingTime.seconds.coerceAtLeast(0)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+
+    val text = if (hours > 0) {
+        String.format(java.util.Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(java.util.Locale.ROOT, "%02d:%02d", minutes, seconds)
+    }
+
+    Text(
+        text = text,
+        modifier = modifier,
+        style = MaterialTheme.typography.headlineLarge,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.error,
+    )
 }
 
 private fun periodScoresText(result: GameResult): String? {
@@ -664,7 +744,6 @@ private fun EventRow(
             val playerName = event.number?.let { playerLookup[it] } ?: ""
             val playerNum = event.number?.let { "#$it" } ?: ""
             primaryText = buildString {
-                append(event.penaltyTypeString ?: "Strafe")
                 append(" $playerNum")
                 if (playerName.isNotEmpty()) append(" $playerName")
             }

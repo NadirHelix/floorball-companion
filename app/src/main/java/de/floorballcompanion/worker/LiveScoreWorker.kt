@@ -20,6 +20,7 @@ import de.floorballcompanion.data.remote.model.ScheduledGame
 import de.floorballcompanion.data.repository.FloorballRepository
 import java.util.concurrent.TimeUnit
 import androidx.core.content.edit
+import de.floorballcompanion.util.isLiveStatus
 
 @HiltWorker
 class LiveScoreWorker @AssistedInject constructor(
@@ -63,7 +64,7 @@ class LiveScoreWorker @AssistedInject constructor(
                 .build()
 
             WorkManager.getInstance(context).enqueueUniqueWork(
-                "${WORK_NAME}_oneshot",
+                "live_score_poll_oneshot",
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
@@ -94,7 +95,7 @@ class LiveScoreWorker @AssistedInject constructor(
 
                     if (!isRelevant) continue
 
-                    if (game.gameStatus == "live") {
+                    if (game.gameStatus.isLiveStatus()) {
                         hasLiveGames = true
                         checkForGoalUpdates(game)
                     }
@@ -116,8 +117,8 @@ class LiveScoreWorker @AssistedInject constructor(
     private suspend fun checkForGoalUpdates(game: ScheduledGame) {
         try {
             val detail = repository.getGameDetail(game.resolvedGameId)
-            val lastGoal = detail.events
-                .filter { it.eventType == "goal" }
+            val lastEvent = detail.events
+                .filter { it.eventType in setOf("goal","penalty","timeout") }
                 .maxByOrNull { it.eventId }
                 ?: return
 
@@ -126,18 +127,23 @@ class LiveScoreWorker @AssistedInject constructor(
             val lastNotifiedEventKey = "game_${game.resolvedGameId}_last_event"
             val lastNotifiedEvent = prefs.getInt(lastNotifiedEventKey, 0)
 
-            if (lastGoal.eventId > lastNotifiedEvent) {
-                sendGoalNotification(detail, lastGoal)
-                prefs.edit { putInt(lastNotifiedEventKey, lastGoal.eventId) }
+            if (lastEvent.eventId > lastNotifiedEvent) {
+                sendEventNotification(detail, lastEvent)
+                prefs.edit { putInt(lastNotifiedEventKey, lastEvent.eventId) }
             }
         } catch (_: Exception) { }
     }
 
     @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
-    private fun sendGoalNotification(game: GameDetail, goal: GameEvent) {
-        val score = "${goal.homeGoals ?: "?"}:${goal.guestGoals ?: "?"}"
-        val title = "\uD83E\uDD45 Tor! ${game.homeTeamName} $score ${game.guestTeamName}"
-        val body = "${goal.time} — ${if (goal.eventTeam == "home") game.homeTeamName else game.guestTeamName}"
+    private fun sendEventNotification(game: GameDetail, event: GameEvent) {
+        val score = "${event.homeGoals ?: "?"}:${event.guestGoals ?: "?"}"
+        val title = when (event.eventType) {
+            "goal" -> "\uD83E\uDD45 Tor! ${game.homeTeamName} $score ${game.guestTeamName}"
+            "penalty" -> "\u274C Strafe! ${event.eventTeam} - ${event.penaltyTypeString}"
+            "timeout" -> "\u23F1 Auszeit! ${event.eventTeam}"
+            else -> "Neuigkeiten im Spiel"
+        }
+        val body = "(${event.period} / ${event.time}) — ${if (event.eventTeam == "home") game.homeTeamName else game.guestTeamName}"
 
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK

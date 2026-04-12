@@ -15,8 +15,8 @@ android {
         applicationId = "de.floorballcompanion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.0"
+        versionCode = 5
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -44,6 +44,7 @@ android {
 
 dependencies {
     implementation("androidx.compose.ui:ui-graphics:1.10.6")
+    implementation(libs.androidx.compose.runtime)
     // Compose BOM
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)

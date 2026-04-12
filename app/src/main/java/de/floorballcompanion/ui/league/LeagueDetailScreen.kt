@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,8 +67,11 @@ import androidx.compose.ui.text.toUpperCase
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import de.floorballcompanion.LocalOriginTabIcon
@@ -85,8 +89,10 @@ import de.floorballcompanion.domain.model.PlayoffRound
 import de.floorballcompanion.domain.model.PlayoffSeries
 import de.floorballcompanion.domain.model.TeamInfo
 import de.floorballcompanion.ui.components.TeamLogo
+import de.floorballcompanion.util.isLiveStatus
 import de.floorballcompanion.ui.team.TeamFavoriteColor
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -380,7 +386,7 @@ class LeagueDetailViewModel @Inject constructor(
     }
 
     private fun isGameLive(game: ScheduledGame): Boolean {
-        return game.gameStatus == "live"
+        return game.gameStatus == "running"
     }
 
     private fun findPhaseIndexForLeague(
@@ -510,6 +516,132 @@ class LeagueDetailViewModel @Inject constructor(
     fun selectTableType(type: TableType) {
         _uiState.update { it.copy(selectedTableType = type) }
     }
+
+    // In LeagueDetailViewModel
+
+    /** Leichter Refresh ohne Spinner: aktualisiert nur Spielpläne + Scorer */
+    fun refreshLight() {
+        viewModelScope.launch {
+            try {
+                val state = _uiState.value
+
+                // Falls Phasen vorhanden → ausgewählte Phase ermitteln
+                val phaseTab = state.phaseTabs.getOrNull(state.selectedPhaseIndex)
+
+                if (phaseTab == null) {
+                    // Keine Phasen
+                    if (state.leagueModus == "cup") {
+                        // Cup -> Playoff-Daten leicht aktualisieren
+                        val schedule = repository.getSchedule(leagueId)
+                        val isChamp = playoffService.isChampionshipFormat(schedule, state.leagueModus)
+                        val scorers = try { repository.getScorer(leagueId) } catch (_: Exception) { emptyList() }
+
+                        if (isChamp) {
+                            _uiState.update {
+                                it.copy(
+                                    isChampionshipFormat = true,
+                                    championshipGames = schedule.filter { (it.gameNumber ?: 0) > 0 }
+                                        .sortedWith(compareBy({ it.date }, { it.time }, { it.gameNumber })),
+                                    playoffScorers = scorers,
+                                )
+                            }
+                        } else {
+                            val rounds = playoffService.buildCupRounds(schedule, false)
+                            val gameDayTitles = rounds.mapIndexed { index, r -> index to r.name }.toMap()
+                            val currentRoundIndex = determineCurrentRoundIndex(rounds)
+                            _uiState.update {
+                                it.copy(
+                                    isChampionshipFormat = false,
+                                    playoffRounds = rounds,
+                                    gameDayTitles = gameDayTitles,
+                                    currentRoundIndex = currentRoundIndex,
+                                    playoffScorers = scorers,
+                                )
+                            }
+                        }
+                    } else {
+                        // Reguläre Liga ohne Phasen
+                        val schedule = repository.getSchedule(leagueId)
+                        val scorers = try { repository.getScorer(leagueId) } catch (_: Exception) { emptyList() }
+
+                        val availableGameDays = schedule.mapNotNull { it.gameDayNumber }.distinct().sorted()
+                        val currentDayNumber = determineCurrentGameDayNumber(schedule)
+                        val currentIndex = availableGameDays.indexOf(currentDayNumber).coerceAtLeast(0)
+
+                        _uiState.update {
+                            it.copy(
+                                allGames = schedule,
+                                availableGameDays = availableGameDays,
+                                currentGameDayIndex = currentIndex,
+                                scorers = scorers,
+                                // Tabelle absichtlich NICHT neu berechnen (teuer)
+                            )
+                        }
+                    }
+                    return@launch
+                }
+
+                // Mit Phasen
+                if (state.currentPhase == LeaguePhase.REGULAR) {
+                    val detail = repository.getLeagueDetail(phaseTab.leagueId)
+                    val schedule = repository.getSchedule(phaseTab.leagueId)
+                    val scorers = try { repository.getScorer(phaseTab.leagueId) } catch (_: Exception) { emptyList() }
+
+                    val availableGameDays = schedule.mapNotNull { it.gameDayNumber }.distinct().sorted()
+                    val gameDayTitles = detail.gameDayTitles.associate { it.gameDayNumber to it.title }
+                    val currentDayNumber = determineCurrentGameDayNumber(schedule)
+                    val currentIndex = availableGameDays.indexOf(currentDayNumber).coerceAtLeast(0)
+
+                    _uiState.update {
+                        it.copy(
+                            allGames = schedule,
+                            availableGameDays = availableGameDays,
+                            gameDayTitles = gameDayTitles,
+                            currentGameDayIndex = currentIndex,
+                            scorers = scorers,
+                        )
+                    }
+                } else {
+                    // Playoff/Playdown/Relegation
+                    val schedule = repository.getSchedule(phaseTab.leagueId)
+                    val detail = try { repository.getLeagueDetail(phaseTab.leagueId) } catch (_: Exception) { null }
+                    val modus = detail?.leagueModus ?: state.leagueModus
+                    val isChamp = playoffService.isChampionshipFormat(schedule, modus)
+                    val scorers = try { repository.getScorer(phaseTab.leagueId) } catch (_: Exception) { emptyList() }
+
+                    if (isChamp) {
+                        _uiState.update {
+                            it.copy(
+                                isChampionshipFormat = true,
+                                championshipGames = schedule.filter { (it.gameNumber ?: 0) > 0 }
+                                    .sortedWith(compareBy({ it.date }, { it.time }, { it.gameNumber })),
+                                playoffScorers = scorers,
+                            )
+                        }
+                    } else {
+                        val isCup = modus == "cup"
+                        val rounds = if (isCup) playoffService.buildCupRounds(schedule, detail?.name?.contains("FD-Pokal") == true)
+                        else playoffService.buildRounds(schedule)
+                        val gameDayTitles = rounds.mapIndexed { index, r -> index to r.name }.toMap()
+                        val currentRoundIndex = determineCurrentRoundIndex(rounds)
+                        _uiState.update {
+                            it.copy(
+                                isChampionshipFormat = false,
+                                playoffRounds = rounds,
+                                availableGameDays = List(rounds.size) { i -> i },
+                                gameDayTitles = gameDayTitles,
+                                currentRoundIndex = currentRoundIndex,
+                                playoffScorers = scorers,
+                            )
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // bewusst still – keine UI-Störung beim Tick-Refresh
+            }
+        }
+    }
+
 }
 
 // -- Hilfsfunktionen ----------------------------------------------------------
@@ -588,7 +720,28 @@ fun LeagueDetailScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val isFavorite by viewModel.isFavorite.collectAsState()
+    val isAnyLive = remember(uiState) {
+        when {
+            uiState.isPlayoffPhase && uiState.isChampionshipFormat ->
+                uiState.championshipGames.any { it.gameStatus?.isLiveStatus() == true }
+            uiState.isPlayoffPhase -> {
+                uiState.playoffRounds.flatMap { it.series }.flatMap { it.games }
+                    .any { it.gameStatus?.isLiveStatus() == true }
+            }
+            else -> uiState.gamesForCurrentDay.any { it.gameStatus?.isLiveStatus() == true }
+        }
+    }
 
+    // 2) Polling: alle 30s, solange Screen sichtbar UND (idealerweise) live
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(isAnyLive) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isAnyLive) {
+                viewModel.refreshLight()
+                delay(30_000)
+            }
+        }
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1557,8 +1710,7 @@ private fun GameCard(game: ScheduledGame, onGameClick: (Int) -> Unit = {}, title
 }
 
 @Composable
-private fun isLive(game: ScheduledGame): Boolean =
-    game.gameStatus?.lowercase() in listOf("live", "1", "2", "3")
+private fun isLive(game: ScheduledGame): Boolean = game.gameStatus?.isLiveStatus()?: false
 
 // -- Tabelle-Tab --------------------------------------------------------------
 

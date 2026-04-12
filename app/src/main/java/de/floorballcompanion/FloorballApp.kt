@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
+import de.floorballcompanion.worker.LiveScoreWorker
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -20,6 +21,7 @@ class FloorballApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        LiveScoreWorker.enqueuePeriodicWork(this)
     }
 
     override val workManagerConfiguration: Configuration
