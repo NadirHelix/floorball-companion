@@ -1,6 +1,18 @@
 package de.floorballcompanion.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.Embedded
+import androidx.room.Index
+import androidx.room.Relation
+
+data class ClubWithTeams(
+    @Embedded val club: ClubEntity,
+    @Relation(
+        parentColumn = "logoUrl",
+        entityColumn = "clubLogoUrl"
+    )
+    val teams: List<ClubTeamEntity>
+)
 
 @Entity(
     tableName = "clubs",
@@ -15,6 +27,11 @@ data class ClubEntity(
 @Entity(
     tableName = "club_teams",
     primaryKeys = ["teamId", "leagueId"],
+    indices = [ // <- NEU
+        Index("clubLogoUrl"),
+        Index("teamName"),
+        Index("gameOperationName"),
+    ]
 )
 data class ClubTeamEntity(
     val clubLogoUrl: String,

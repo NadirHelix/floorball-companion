@@ -144,17 +144,65 @@ class LeagueGroupingService @Inject constructor() {
     ): LeaguePreview? {
         if (baseName.isBlank() && phaseLeague.leagueClassId == null) return null
 
+        // Lokale Helfer, um Abhängigkeiten außerhalb der Klasse zu vermeiden
         val baseNorm = normalize(expandAbbreviations(baseName))
+
+        // Stoppwörter sehr breit halten: generische Liganamen/-attribute filtern
+        val STOPWORDS = setOf(
+            "liga","regionalliga","verbandsliga","oberliga","landesliga","bundesliga",
+            "bayern","nord","sued","süd","ost","west","mitte","nordost","suedost","südost",
+            "staffel","gruppe","feld","kleinfeld","grossfeld","großfeld","cup","pokal",
+            "herren","damen","junioren","juniorinnen","u11","u13","u15","u17","u19","u","kf","gf"
+        )
+
+        fun tokens(s: String): Set<String> =
+            s.split(Regex("\\s+"))
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it !in STOPWORDS }
+                .toSet()
+
+        fun hasWord(haystack: String, word: String): Boolean =
+            Regex("\\b$word\\b", RegexOption.IGNORE_CASE).containsMatchIn(haystack)
+
+        val uRegex = Regex("\\bu\\d+\\b", RegexOption.IGNORE_CASE)
+        val phaseU = uRegex.find(baseNorm)?.value?.lowercase()
+        val phaseIsHerren = hasWord(baseNorm, "herren")
+        val phaseIsDamen = hasWord(baseNorm, "damen")
+        val phaseIsJunioren = hasWord(baseNorm, "junioren") || hasWord(baseNorm, "juniorinnen")
 
         data class Scored(val league: LeaguePreview, val score: Double)
 
+        val phaseTokens = tokens(baseNorm)
+
         val scored = candidates.mapNotNull { candidate ->
             val candNorm = normalize(expandAbbreviations(candidate.name))
+            val candTokens = tokens(candNorm)
 
-            // Namens-Score berechnen
+            // Harte Ausschlüsse: Alters-/Geschlechts-Mismatch
+            run {
+                val candU = uRegex.find(candNorm)?.value?.lowercase()
+                val candIsHerren = hasWord(candNorm, "herren")
+                val candIsDamen = hasWord(candNorm, "damen")
+                val candIsJunioren = hasWord(candNorm, "junioren") || hasWord(candNorm, "juniorinnen")
+
+                // U-Klasse muss übereinstimmen, wenn die Phase eine U-Spezifikation trägt
+                if (phaseU != null && phaseU != candU) return@mapNotNull null
+
+                // Herren/Damen müssen passen, wenn in der Phase vorhanden
+                if (phaseIsHerren && !candIsHerren) return@mapNotNull null
+                if (phaseIsDamen && !candIsDamen) return@mapNotNull null
+
+                // Jugendmerkmal: wenn Phase Junioren ist, Kandidat sollte ebenfalls Jugend sein
+                if (phaseIsJunioren && !candIsJunioren) return@mapNotNull null
+            }
+
+            // Namens-Score wie bisher, aber mit Mindestanforderung: Token-Overlap
+            val hasTokenOverlap = phaseTokens.intersect(candTokens).isNotEmpty()
+            val exactEqual = baseNorm == candNorm
+
             var score = when {
                 baseNorm.isBlank() -> 0.0
-                baseNorm == candNorm -> 1.0
+                exactEqual -> 1.0
                 baseNorm.startsWith(candNorm) ->
                     candNorm.length.toDouble() / baseNorm.length
                 candNorm.startsWith(baseNorm) ->
@@ -166,12 +214,18 @@ class LeagueGroupingService @Inject constructor() {
                 else -> 0.0
             }
 
-            // leagueClassId-Bonus: gleiche Klasse + gleiche Feldgroesse = starkes Signal
+            // Mindestanforderung: ohne Token-Overlap (oder exakte Gleichheit) kein Match
+            if (!hasTokenOverlap && !exactEqual) {
+                score = 0.0
+            }
+
+            // leagueClassId/fieldSize-Bonus nur verstärkend, nicht von 0 auf 0.6 heben
             if (phaseLeague.leagueClassId != null &&
                 phaseLeague.leagueClassId == candidate.leagueClassId &&
-                phaseLeague.fieldSize == candidate.fieldSize
+                phaseLeague.fieldSize == candidate.fieldSize &&
+                score > 0.0
             ) {
-                score = if (score > 0.0) (score + 0.3).coerceAtMost(1.0) else 0.6
+                score = (score + 0.3).coerceAtMost(1.0)
             }
 
             if (score >= 0.5) Scored(candidate, score) else null

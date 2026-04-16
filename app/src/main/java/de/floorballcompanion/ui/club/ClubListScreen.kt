@@ -17,11 +17,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.content.edit
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -45,12 +52,14 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import de.floorballcompanion.data.local.entity.ClubEntity
+import de.floorballcompanion.data.local.entity.ClubWithTeams
 import de.floorballcompanion.data.repository.FloorballRepository
 import de.floorballcompanion.ui.components.TeamLogo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
@@ -68,28 +77,67 @@ class ClubListViewModel @Inject constructor(
         private const val KEY_DISCLAIMER_DISMISSED = "disclaimer_dismissed"
     }
 
-    val clubs: StateFlow<List<ClubEntity>> =
-        repository.observeAllClubs()
+    // Alle Clubs inkl. Teams
+    private val clubsWithTeams: StateFlow<List<ClubWithTeams>> =
+        repository.observeClubsWithTeams()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Logo-URLs von favorisierten Teams → für Clubs-mit-Favoriten-Erkennung
+    // Verbände (Namen aus gameOperationName)
+    val availableFederations: StateFlow<List<String>> =
+        repository.observeAllGameOperations()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Favoriten wie gehabt
     val favoriteTeamLogoUrls: StateFlow<Set<String>> =
         repository.observeFavoriteTeams()
             .map { favs -> favs.mapNotNull { it.logoUrl }.toSet() }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
+    // Suche + Verbandfilter
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
 
+    private val _selectedFederation = MutableStateFlow<String?>(null)
+    val selectedFederation = _selectedFederation.asStateFlow()
+
+    fun selectFederation(federation: String?) {
+        _selectedFederation.value = federation
+    }
+
+    // Gefilterte Clubs (nur ClubEntity für bestehendes UI)
+    val clubs: StateFlow<List<ClubWithTeams>> =
+        combine(clubsWithTeams, _searchQuery, _selectedFederation) { list, q, fed ->
+            val qTrim = q.trim()
+            val qLen = qTrim.length
+            val qLower = qTrim.lowercase()
+            val applyFed = fed?.isNotEmpty()?: false
+
+            list.filter { cwt ->
+                val matchesText =
+                    if (qLower.isEmpty()) true
+                    else if (qLen < 3) {
+                        cwt.club.name.contains(qLower, ignoreCase = true)
+                    } else {
+                        cwt.club.name.contains(qLower, ignoreCase = true) ||
+                                cwt.teams.any { it.teamName.contains(qLower, ignoreCase = true) }
+                    }
+
+                val matchesFederation =
+                    if (!applyFed) true
+                    else cwt.teams.any { it.gameOperationName == fed }
+
+                matchesText && matchesFederation
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Disclaimer-Prefs wie gehabt
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val _disclaimerDismissed = MutableStateFlow(
         prefs.getBoolean(KEY_DISCLAIMER_DISMISSED, false)
     )
     val disclaimerDismissed = _disclaimerDismissed.asStateFlow()
 
-    fun updateSearch(query: String) {
-        _searchQuery.value = query
-    }
+    fun updateSearch(query: String) { _searchQuery.value = query }
 
     fun dismissDisclaimer() {
         prefs.edit { putBoolean(KEY_DISCLAIMER_DISMISSED, true) }
@@ -108,21 +156,23 @@ fun ClubListScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val favoriteLogoUrls by viewModel.favoriteTeamLogoUrls.collectAsState()
     val disclaimerDismissed by viewModel.disclaimerDismissed.collectAsState()
+    val federations by viewModel.availableFederations.collectAsState()
+    val selectedFederation by viewModel.selectedFederation.collectAsState()
 
-    var searchVisible by remember { mutableStateOf(false) }
+    var searchVisible by remember { mutableStateOf(searchQuery.isNotBlank() ||
+            selectedFederation?.isNotEmpty()?:false) }
 
-    // Clubs mit Favoriten vs. Rest
     val (favoriteClubs, otherClubs) = remember(clubs, favoriteLogoUrls) {
-        clubs.partition { it.logoUrl in favoriteLogoUrls }
+        clubs.partition { it.club.logoUrl in favoriteLogoUrls }
     }
 
     val filteredFavorite = remember(favoriteClubs, searchQuery) {
         if (searchQuery.isBlank()) favoriteClubs
-        else favoriteClubs.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        else favoriteClubs.filter { it.teams.any { it.teamName.contains(searchQuery, ignoreCase = true) } }
     }
     val filteredOther = remember(otherClubs, searchQuery) {
         if (searchQuery.isBlank()) otherClubs
-        else otherClubs.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        else otherClubs.filter { it.teams.any { it.teamName.contains(searchQuery, ignoreCase = true) }}
     }
     val filteredClubs = filteredFavorite + filteredOther
 
@@ -141,7 +191,10 @@ fun ClubListScreen(
             )
             IconButton(onClick = {
                 searchVisible = !searchVisible
-                if (!searchVisible) viewModel.updateSearch("")
+                if (!searchVisible) {
+                    viewModel.updateSearch("")
+                    viewModel.selectFederation(null)
+                }
             }) {
                 Icon(
                     imageVector = if (searchVisible) Icons.Default.Close else Icons.Default.Search,
@@ -155,13 +208,24 @@ fun ClubListScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { viewModel.updateSearch(it) },
-                placeholder = { Text("Verein suchen...") },
+                placeholder = { Text("Verein oder Team suchen...") }, // kleiner UX-Hinweis
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 singleLine = true,
             )
+
+            // Dropdown nur in diesem Block rendern
+            CompactFederationDropdown(
+                federations = federations,
+                selected = selectedFederation,
+                onSelect = { viewModel.selectFederation(it) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
         }
+
 
         // Disclaimer (wegklickbar)
         if (!disclaimerDismissed) {
@@ -250,8 +314,8 @@ fun ClubListScreen(
                             modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                         )
                     }
-                    items(filteredFavorite, key = { "fav-${it.logoUrl}" }) { club ->
-                        ClubCard(club = club, onClick = { onClubClick(club.logoUrl) })
+                    items(filteredFavorite, key = { "fav-${it.club.logoUrl}" }) {
+                        ClubCard(club = it.club, onClick = { onClubClick(it.club.logoUrl) })
                     }
                 }
 
@@ -263,8 +327,8 @@ fun ClubListScreen(
                 }
 
                 // Alle anderen Vereine
-                items(filteredOther, key = { it.logoUrl }) { club ->
-                    ClubCard(club = club, onClick = { onClubClick(club.logoUrl) })
+                items(filteredOther, key = { it.club.logoUrl }) {
+                    ClubCard(club = it.club, onClick = { onClubClick(it.club.logoUrl) })
                 }
             }
         }
@@ -296,6 +360,62 @@ private fun ClubCard(
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
             )
+        }
+    }
+}
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CompactFederationDropdown(
+    federations: List<String>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (federations.isNotEmpty()) expanded = !expanded },
+        modifier = modifier.zIndex(1f)
+    ) {
+        AssistChip(
+            onClick = { if (federations.isNotEmpty()) expanded = true },
+            label = {
+                Text(
+                    text = selected ?: "Alle Verbände",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null
+                )
+            },
+            enabled = federations.isNotEmpty(),
+            modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+        )
+
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("Alle Verbände") },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                }
+            )
+            federations.forEach { fed ->
+                DropdownMenuItem(
+                    text = { Text(fed) },
+                    onClick = {
+                        onSelect(fed)
+                        expanded = false
+                    }
+                )
+            }
         }
     }
 }

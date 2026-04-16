@@ -176,7 +176,7 @@ fun GameDetailScreen(
                         Spacer(Modifier.width(8.dp))
                         val game = uiState.game
                         Text(
-                            if (game != null) "${game.homeTeamName} vs ${game.guestTeamName}"
+                            if (game != null) "${game.homeTeamName?:"Unbekannt"} vs ${game.guestTeamName?:"Unbekannt"}"
                             else "Spiel-Details",
                             maxLines = 1,
                         )
@@ -358,7 +358,7 @@ private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _,
                     TeamLogo(game.homeTeamLogo, game.homeTeamName, size = 48.dp)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        game.homeTeamName,
+                        game.homeTeamName?:"Noch nicht bekannt",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center,
@@ -446,7 +446,7 @@ private fun ScoreHeader(game: GameDetail, onTeamClick: (Int, Int) -> Unit = { _,
                     TeamLogo(game.guestTeamLogo, game.guestTeamName, size = 48.dp)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        game.guestTeamName,
+                        game.guestTeamName?: "Noch nicht bekannt",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center,
@@ -626,14 +626,14 @@ private fun EventsTab(game: GameDetail) {
                     TeamLogo(game.homeTeamLogo, game.homeTeamName, size = 24.dp)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        game.homeTeamName,
+                        game.homeTeamName?: "Noch nicht bekannt",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
                     )
                     Text(
-                        game.guestTeamName,
+                        game.guestTeamName?: "Noch nicht bekannt",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f),
@@ -916,7 +916,7 @@ private fun RosterTab(game: GameDetail) {
                 Tab(
                     selected = selectedTeam == index,
                     onClick = { selectedTeam = index },
-                    text = { Text(name, maxLines = 1) },
+                    text = { Text(name?: "Noch nicht bekannt", maxLines = 1) },
                 )
             }
         }

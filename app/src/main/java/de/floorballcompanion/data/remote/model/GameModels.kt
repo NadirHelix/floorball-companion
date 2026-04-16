@@ -35,11 +35,11 @@ data class GameDetail(
     @SerialName("live_stream_link") val liveStreamLink: String? = null,
     @SerialName("vod_link") val vodLink: String? = null,
 
-    @SerialName("home_team_id") val homeTeamId: Int,
-    @SerialName("home_team_name") val homeTeamName: String,
+    @SerialName("home_team_id") val homeTeamId: Int = 0,
+    @SerialName("home_team_name") val homeTeamName: String? = null,
     @SerialName("home_team_logo") val homeTeamLogo: String? = null,
-    @SerialName("guest_team_id") val guestTeamId: Int,
-    @SerialName("guest_team_name") val guestTeamName: String,
+    @SerialName("guest_team_id") val guestTeamId: Int = 0,
+    @SerialName("guest_team_name") val guestTeamName: String? = null,
     @SerialName("guest_team_logo") val guestTeamLogo: String? = null,
 
     @SerialName("game_day") val gameDay: GameDayTitle? = null,

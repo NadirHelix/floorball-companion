@@ -16,7 +16,7 @@ import de.floorballcompanion.data.local.entity.*
         ClubEntity::class,
         ClubTeamEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

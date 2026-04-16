@@ -172,6 +172,12 @@ class FloorballRepository @Inject constructor(
 
     suspend fun getClubCount(): Int =
         clubDao.getClubCount()
+
+    fun observeClubsWithTeams(): Flow<List<ClubWithTeams>> =
+        clubDao.observeClubsWithTeams()
+
+    fun observeAllGameOperations(): Flow<List<String>> =
+        clubDao.observeAllGameOperations()
 }
 
 // ── Mapping-Extensions ───────────────────────────────────────
